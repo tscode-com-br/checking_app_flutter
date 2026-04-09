@@ -1,0 +1,342 @@
+import 'package:checking/src/features/checking/checking_preset_config.dart';
+
+enum RegistroType { checkIn, checkOut }
+
+enum InformeType { normal, retroativo }
+
+enum ProjetoType { p80, p82, p83 }
+
+enum StatusTone { neutral, success, warning, error }
+
+extension RegistroTypeX on RegistroType {
+  String get label => this == RegistroType.checkIn ? 'Check-In' : 'Check-Out';
+  String get apiValue => this == RegistroType.checkIn ? 'checkin' : 'checkout';
+}
+
+extension InformeTypeX on InformeType {
+  String get label => this == InformeType.normal ? 'Normal' : 'Retroativo';
+}
+
+extension ProjetoTypeX on ProjetoType {
+  String get label => switch (this) {
+    ProjetoType.p80 => 'P-80',
+    ProjetoType.p82 => 'P-82',
+    ProjetoType.p83 => 'P-83',
+  };
+
+  String get apiValue => switch (this) {
+    ProjetoType.p80 => 'P80',
+    ProjetoType.p82 => 'P82',
+    ProjetoType.p83 => 'P83',
+  };
+}
+
+const _unset = Object();
+
+class CheckingState {
+  static const String legacyDefaultChave = 'HR70';
+
+  const CheckingState({
+    required this.chave,
+    required this.registro,
+    required this.checkInInforme,
+    required this.checkOutInforme,
+    required this.checkInProjeto,
+    required this.apiBaseUrl,
+    required this.apiSharedKey,
+    required this.scheduleInEnabled,
+    required this.scheduleInTime,
+    required this.scheduleOutEnabled,
+    required this.scheduleOutTime,
+    required this.scheduleDays,
+    required this.locationSharingEnabled,
+    required this.autoCheckInEnabled,
+    required this.autoCheckOutEnabled,
+    required this.lastMatchedLocation,
+    required this.lastCheckInLocation,
+    required this.lastCheckIn,
+    required this.lastCheckOut,
+    required this.statusMessage,
+    required this.statusTone,
+    required this.settingsPanelOpen,
+    required this.isLoading,
+    required this.isSubmitting,
+    required this.isSyncing,
+    required this.isLocationUpdating,
+  });
+
+  factory CheckingState.initial() {
+    return const CheckingState(
+      chave: '',
+      registro: RegistroType.checkIn,
+      checkInInforme: InformeType.normal,
+      checkOutInforme: InformeType.normal,
+      checkInProjeto: ProjetoType.p80,
+      apiBaseUrl: CheckingPresetConfig.apiBaseUrl,
+      apiSharedKey: CheckingPresetConfig.apiSharedKey,
+      scheduleInEnabled: false,
+      scheduleInTime: '07:45',
+      scheduleOutEnabled: false,
+      scheduleOutTime: '16:45',
+      scheduleDays: {1, 2, 3, 4, 5},
+      locationSharingEnabled: false,
+      autoCheckInEnabled: false,
+      autoCheckOutEnabled: false,
+      lastMatchedLocation: null,
+      lastCheckInLocation: null,
+      lastCheckIn: null,
+      lastCheckOut: null,
+      statusMessage: '',
+      statusTone: StatusTone.neutral,
+      settingsPanelOpen: false,
+      isLoading: true,
+      isSubmitting: false,
+      isSyncing: false,
+      isLocationUpdating: false,
+    );
+  }
+
+  factory CheckingState.fromJson(Map<String, dynamic> json) {
+    final storedRegistro = RegistroType.values.firstWhere(
+      (value) => value.name == json['registro'],
+      orElse: () => RegistroType.checkIn,
+    );
+    final legacyInforme = InformeType.values.firstWhere(
+      (value) => value.name == json['informe'],
+      orElse: () => InformeType.normal,
+    );
+    final legacyProjeto = ProjetoType.values.firstWhere(
+      (value) => value.name == json['projeto'],
+      orElse: () => ProjetoType.p80,
+    );
+
+    return CheckingState(
+      chave: sanitizeChave((json['chave'] as String? ?? '').toUpperCase()),
+      registro: inferSuggestedRegistro(
+        lastCheckIn: null,
+        lastCheckOut: null,
+        fallback: storedRegistro,
+      ),
+      checkInInforme: InformeType.values.firstWhere(
+        (value) => value.name == json['checkInInforme'],
+        orElse: () => storedRegistro == RegistroType.checkIn
+            ? legacyInforme
+            : InformeType.normal,
+      ),
+      checkOutInforme: InformeType.values.firstWhere(
+        (value) => value.name == json['checkOutInforme'],
+        orElse: () => storedRegistro == RegistroType.checkOut
+            ? legacyInforme
+            : InformeType.normal,
+      ),
+      checkInProjeto: ProjetoType.values.firstWhere(
+        (value) => value.name == (json['checkInProjeto'] ?? json['projeto']),
+        orElse: () => legacyProjeto,
+      ),
+      apiBaseUrl:
+          json['apiBaseUrl'] as String? ?? CheckingPresetConfig.apiBaseUrl,
+      apiSharedKey:
+          json['apiSharedKey'] as String? ?? CheckingPresetConfig.apiSharedKey,
+      scheduleInEnabled: json['scheduleInEnabled'] as bool? ?? false,
+      scheduleInTime: json['scheduleInTime'] as String? ?? '07:45',
+      scheduleOutEnabled: json['scheduleOutEnabled'] as bool? ?? false,
+      scheduleOutTime: json['scheduleOutTime'] as String? ?? '16:45',
+      scheduleDays:
+          ((json['scheduleDays'] as List<dynamic>? ?? const [1, 2, 3, 4, 5])
+                  .whereType<int>())
+              .toSet(),
+      locationSharingEnabled: json['locationSharingEnabled'] as bool? ?? false,
+      autoCheckInEnabled: json['autoCheckInEnabled'] as bool? ?? false,
+      autoCheckOutEnabled: json['autoCheckOutEnabled'] as bool? ?? false,
+      lastMatchedLocation: _normalizeOptionalText(
+        json['lastMatchedLocation'] as String?,
+      ),
+      lastCheckInLocation: _normalizeOptionalText(
+        json['lastCheckInLocation'] as String?,
+      ),
+      lastCheckIn: null,
+      lastCheckOut: null,
+      statusMessage: '',
+      statusTone: StatusTone.neutral,
+      settingsPanelOpen: false,
+      isLoading: false,
+      isSubmitting: false,
+      isSyncing: false,
+      isLocationUpdating: false,
+    );
+  }
+
+  final String chave;
+  final RegistroType registro;
+  final InformeType checkInInforme;
+  final InformeType checkOutInforme;
+  final ProjetoType checkInProjeto;
+  final String apiBaseUrl;
+  final String apiSharedKey;
+  final bool scheduleInEnabled;
+  final String scheduleInTime;
+  final bool scheduleOutEnabled;
+  final String scheduleOutTime;
+  final Set<int> scheduleDays;
+  final bool locationSharingEnabled;
+  final bool autoCheckInEnabled;
+  final bool autoCheckOutEnabled;
+  final String? lastMatchedLocation;
+  final String? lastCheckInLocation;
+  final DateTime? lastCheckIn;
+  final DateTime? lastCheckOut;
+  final String statusMessage;
+  final StatusTone statusTone;
+  final bool settingsPanelOpen;
+  final bool isLoading;
+  final bool isSubmitting;
+  final bool isSyncing;
+  final bool isLocationUpdating;
+
+  InformeType get informe => informeFor(registro);
+  ProjetoType get projeto => checkInProjeto;
+
+  bool get hasValidChave => chave.trim().length == 4;
+  bool get hasApiConfig =>
+      apiBaseUrl.trim().isNotEmpty && apiSharedKey.trim().isNotEmpty;
+  bool get hasAnySchedule => scheduleInEnabled || scheduleOutEnabled;
+  bool get hasAnyLocationAutomation =>
+      autoCheckInEnabled || autoCheckOutEnabled;
+
+  InformeType informeFor(RegistroType action) {
+    return action == RegistroType.checkIn ? checkInInforme : checkOutInforme;
+  }
+
+  ProjetoType projetoFor(RegistroType action) {
+    return checkInProjeto;
+  }
+
+  static String sanitizeChave(String value) {
+    final normalized = value.trim().toUpperCase();
+    if (normalized == legacyDefaultChave) {
+      return '';
+    }
+    return normalized;
+  }
+
+  static RegistroType inferSuggestedRegistro({
+    required DateTime? lastCheckIn,
+    required DateTime? lastCheckOut,
+    RegistroType fallback = RegistroType.checkIn,
+  }) {
+    if (lastCheckIn == null && lastCheckOut == null) {
+      return fallback;
+    }
+    if (lastCheckIn != null && lastCheckOut == null) {
+      return RegistroType.checkOut;
+    }
+    if (lastCheckIn == null && lastCheckOut != null) {
+      return RegistroType.checkIn;
+    }
+    if (lastCheckIn!.isAfter(lastCheckOut!)) {
+      return RegistroType.checkOut;
+    }
+    if (lastCheckIn.isBefore(lastCheckOut)) {
+      return RegistroType.checkIn;
+    }
+    return fallback;
+  }
+
+  static String? _normalizeOptionalText(String? value) {
+    final normalized = value?.trim();
+    if (normalized == null || normalized.isEmpty) {
+      return null;
+    }
+    return normalized;
+  }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'chave': chave,
+      'registro': registro.name,
+      'informe': informe.name,
+      'projeto': checkInProjeto.name,
+      'checkInInforme': checkInInforme.name,
+      'checkOutInforme': checkOutInforme.name,
+      'checkInProjeto': checkInProjeto.name,
+      'apiBaseUrl': apiBaseUrl,
+      'scheduleInEnabled': scheduleInEnabled,
+      'scheduleInTime': scheduleInTime,
+      'scheduleOutEnabled': scheduleOutEnabled,
+      'scheduleOutTime': scheduleOutTime,
+      'scheduleDays': scheduleDays.toList()..sort(),
+      'locationSharingEnabled': locationSharingEnabled,
+      'autoCheckInEnabled': autoCheckInEnabled,
+      'autoCheckOutEnabled': autoCheckOutEnabled,
+      'lastMatchedLocation': lastMatchedLocation,
+      'lastCheckInLocation': lastCheckInLocation,
+    };
+  }
+
+  CheckingState copyWith({
+    String? chave,
+    RegistroType? registro,
+    InformeType? checkInInforme,
+    InformeType? checkOutInforme,
+    ProjetoType? checkInProjeto,
+    String? apiBaseUrl,
+    String? apiSharedKey,
+    bool? scheduleInEnabled,
+    String? scheduleInTime,
+    bool? scheduleOutEnabled,
+    String? scheduleOutTime,
+    Set<int>? scheduleDays,
+    bool? locationSharingEnabled,
+    bool? autoCheckInEnabled,
+    bool? autoCheckOutEnabled,
+    Object? lastMatchedLocation = _unset,
+    Object? lastCheckInLocation = _unset,
+    Object? lastCheckIn = _unset,
+    Object? lastCheckOut = _unset,
+    String? statusMessage,
+    StatusTone? statusTone,
+    bool? settingsPanelOpen,
+    bool? isLoading,
+    bool? isSubmitting,
+    bool? isSyncing,
+    bool? isLocationUpdating,
+  }) {
+    return CheckingState(
+      chave: chave ?? this.chave,
+      registro: registro ?? this.registro,
+      checkInInforme: checkInInforme ?? this.checkInInforme,
+      checkOutInforme: checkOutInforme ?? this.checkOutInforme,
+      checkInProjeto: checkInProjeto ?? this.checkInProjeto,
+      apiBaseUrl: apiBaseUrl ?? this.apiBaseUrl,
+      apiSharedKey: apiSharedKey ?? this.apiSharedKey,
+      scheduleInEnabled: scheduleInEnabled ?? this.scheduleInEnabled,
+      scheduleInTime: scheduleInTime ?? this.scheduleInTime,
+      scheduleOutEnabled: scheduleOutEnabled ?? this.scheduleOutEnabled,
+      scheduleOutTime: scheduleOutTime ?? this.scheduleOutTime,
+      scheduleDays: scheduleDays ?? this.scheduleDays,
+      locationSharingEnabled:
+          locationSharingEnabled ?? this.locationSharingEnabled,
+      autoCheckInEnabled: autoCheckInEnabled ?? this.autoCheckInEnabled,
+      autoCheckOutEnabled: autoCheckOutEnabled ?? this.autoCheckOutEnabled,
+      lastMatchedLocation: identical(lastMatchedLocation, _unset)
+          ? this.lastMatchedLocation
+          : lastMatchedLocation as String?,
+      lastCheckInLocation: identical(lastCheckInLocation, _unset)
+          ? this.lastCheckInLocation
+          : lastCheckInLocation as String?,
+      lastCheckIn: identical(lastCheckIn, _unset)
+          ? this.lastCheckIn
+          : lastCheckIn as DateTime?,
+      lastCheckOut: identical(lastCheckOut, _unset)
+          ? this.lastCheckOut
+          : lastCheckOut as DateTime?,
+      statusMessage: statusMessage ?? this.statusMessage,
+      statusTone: statusTone ?? this.statusTone,
+      settingsPanelOpen: settingsPanelOpen ?? this.settingsPanelOpen,
+      isLoading: isLoading ?? this.isLoading,
+      isSubmitting: isSubmitting ?? this.isSubmitting,
+      isSyncing: isSyncing ?? this.isSyncing,
+      isLocationUpdating: isLocationUpdating ?? this.isLocationUpdating,
+    );
+  }
+}
