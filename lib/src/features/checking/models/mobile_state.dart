@@ -6,6 +6,7 @@ class MobileStateResponse {
     required this.projeto,
     required this.currentAction,
     required this.currentEventTime,
+    this.currentLocal,
     required this.lastCheckInAt,
     required this.lastCheckOutAt,
   });
@@ -18,6 +19,7 @@ class MobileStateResponse {
       projeto: json['projeto'] as String?,
       currentAction: json['current_action'] as String?,
       currentEventTime: _parse(json['current_event_time']),
+      currentLocal: json['current_local'] as String?,
       lastCheckInAt: _parse(json['last_checkin_at']),
       lastCheckOutAt: _parse(json['last_checkout_at']),
     );
@@ -29,6 +31,7 @@ class MobileStateResponse {
   final String? projeto;
   final String? currentAction;
   final DateTime? currentEventTime;
+  final String? currentLocal;
   final DateTime? lastCheckInAt;
   final DateTime? lastCheckOutAt;
 
@@ -55,7 +58,9 @@ class MobileSubmitResponse {
       duplicate: json['duplicate'] as bool? ?? false,
       queuedForms: json['queued_forms'] as bool? ?? true,
       message: json['message'] as String? ?? 'Operação processada.',
-      state: MobileStateResponse.fromJson(json['state'] as Map<String, dynamic>? ?? const <String, dynamic>{}),
+      state: MobileStateResponse.fromJson(
+        json['state'] as Map<String, dynamic>? ?? const <String, dynamic>{},
+      ),
     );
   }
 

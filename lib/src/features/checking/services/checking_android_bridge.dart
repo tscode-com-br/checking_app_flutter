@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:checking/src/features/checking/models/checking_state.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
@@ -49,20 +48,12 @@ class CheckingAndroidBridge {
     return normalized;
   }
 
-  Future<void> syncSchedules(CheckingState state) async {
+  Future<void> clearSchedules() async {
     if (!_isSupported) {
       return;
     }
 
-    await _channel.invokeMethod<void>('syncSchedules', <String, Object?>{
-      'scheduleInEnabled':
-          state.hasValidChave && state.hasApiConfig && state.scheduleInEnabled,
-      'scheduleInTime': state.scheduleInTime,
-      'scheduleOutEnabled':
-          state.hasValidChave && state.hasApiConfig && state.scheduleOutEnabled,
-      'scheduleOutTime': state.scheduleOutTime,
-      'scheduleDays': state.scheduleDays.toList()..sort(),
-    });
+    await _channel.invokeMethod<void>('clearSchedules');
   }
 
   bool get _isSupported =>

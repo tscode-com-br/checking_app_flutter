@@ -11,7 +11,7 @@ class BootCompletedReceiver : BroadcastReceiver() {
             Intent.ACTION_MY_PACKAGE_REPLACED,
             Intent.ACTION_LOCKED_BOOT_COMPLETED,
             -> {
-                ScheduledNotificationReceiver.rescheduleStoredAlarms(context)
+                ScheduledNotificationReceiver.clearStoredSchedules(context)
             }
         }
     }

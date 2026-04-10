@@ -42,11 +42,6 @@ class CheckingState {
     required this.checkInProjeto,
     required this.apiBaseUrl,
     required this.apiSharedKey,
-    required this.scheduleInEnabled,
-    required this.scheduleInTime,
-    required this.scheduleOutEnabled,
-    required this.scheduleOutTime,
-    required this.scheduleDays,
     required this.locationSharingEnabled,
     required this.autoCheckInEnabled,
     required this.autoCheckOutEnabled,
@@ -58,7 +53,6 @@ class CheckingState {
     required this.lastCheckOut,
     required this.statusMessage,
     required this.statusTone,
-    required this.settingsPanelOpen,
     required this.isLoading,
     required this.isSubmitting,
     required this.isSyncing,
@@ -74,11 +68,6 @@ class CheckingState {
       checkInProjeto: ProjetoType.p80,
       apiBaseUrl: CheckingPresetConfig.apiBaseUrl,
       apiSharedKey: CheckingPresetConfig.apiSharedKey,
-      scheduleInEnabled: false,
-      scheduleInTime: '07:45',
-      scheduleOutEnabled: false,
-      scheduleOutTime: '16:45',
-      scheduleDays: {1, 2, 3, 4, 5},
       locationSharingEnabled: false,
       autoCheckInEnabled: false,
       autoCheckOutEnabled: false,
@@ -90,7 +79,6 @@ class CheckingState {
       lastCheckOut: null,
       statusMessage: '',
       statusTone: StatusTone.neutral,
-      settingsPanelOpen: false,
       isLoading: true,
       isSubmitting: false,
       isSyncing: false,
@@ -139,14 +127,6 @@ class CheckingState {
           json['apiBaseUrl'] as String? ?? CheckingPresetConfig.apiBaseUrl,
       apiSharedKey:
           json['apiSharedKey'] as String? ?? CheckingPresetConfig.apiSharedKey,
-      scheduleInEnabled: json['scheduleInEnabled'] as bool? ?? false,
-      scheduleInTime: json['scheduleInTime'] as String? ?? '07:45',
-      scheduleOutEnabled: json['scheduleOutEnabled'] as bool? ?? false,
-      scheduleOutTime: json['scheduleOutTime'] as String? ?? '16:45',
-      scheduleDays:
-          ((json['scheduleDays'] as List<dynamic>? ?? const [1, 2, 3, 4, 5])
-                  .whereType<int>())
-              .toSet(),
       locationSharingEnabled: json['locationSharingEnabled'] as bool? ?? false,
       autoCheckInEnabled: json['autoCheckInEnabled'] as bool? ?? false,
       autoCheckOutEnabled: json['autoCheckOutEnabled'] as bool? ?? false,
@@ -166,7 +146,6 @@ class CheckingState {
       lastCheckOut: null,
       statusMessage: '',
       statusTone: StatusTone.neutral,
-      settingsPanelOpen: false,
       isLoading: false,
       isSubmitting: false,
       isSyncing: false,
@@ -181,11 +160,6 @@ class CheckingState {
   final ProjetoType checkInProjeto;
   final String apiBaseUrl;
   final String apiSharedKey;
-  final bool scheduleInEnabled;
-  final String scheduleInTime;
-  final bool scheduleOutEnabled;
-  final String scheduleOutTime;
-  final Set<int> scheduleDays;
   final bool locationSharingEnabled;
   final bool autoCheckInEnabled;
   final bool autoCheckOutEnabled;
@@ -197,7 +171,6 @@ class CheckingState {
   final DateTime? lastCheckOut;
   final String statusMessage;
   final StatusTone statusTone;
-  final bool settingsPanelOpen;
   final bool isLoading;
   final bool isSubmitting;
   final bool isSyncing;
@@ -209,7 +182,6 @@ class CheckingState {
   bool get hasValidChave => chave.trim().length == 4;
   bool get hasApiConfig =>
       apiBaseUrl.trim().isNotEmpty && apiSharedKey.trim().isNotEmpty;
-  bool get hasAnySchedule => scheduleInEnabled || scheduleOutEnabled;
   bool get hasAnyLocationAutomation =>
       autoCheckInEnabled || autoCheckOutEnabled;
   RegistroType? get lastRecordedAction {
@@ -293,11 +265,6 @@ class CheckingState {
       'checkOutInforme': checkOutInforme.name,
       'checkInProjeto': checkInProjeto.name,
       'apiBaseUrl': apiBaseUrl,
-      'scheduleInEnabled': scheduleInEnabled,
-      'scheduleInTime': scheduleInTime,
-      'scheduleOutEnabled': scheduleOutEnabled,
-      'scheduleOutTime': scheduleOutTime,
-      'scheduleDays': scheduleDays.toList()..sort(),
       'locationSharingEnabled': locationSharingEnabled,
       'autoCheckInEnabled': autoCheckInEnabled,
       'autoCheckOutEnabled': autoCheckOutEnabled,
@@ -316,11 +283,6 @@ class CheckingState {
     ProjetoType? checkInProjeto,
     String? apiBaseUrl,
     String? apiSharedKey,
-    bool? scheduleInEnabled,
-    String? scheduleInTime,
-    bool? scheduleOutEnabled,
-    String? scheduleOutTime,
-    Set<int>? scheduleDays,
     bool? locationSharingEnabled,
     bool? autoCheckInEnabled,
     bool? autoCheckOutEnabled,
@@ -332,7 +294,6 @@ class CheckingState {
     Object? lastCheckOut = _unset,
     String? statusMessage,
     StatusTone? statusTone,
-    bool? settingsPanelOpen,
     bool? isLoading,
     bool? isSubmitting,
     bool? isSyncing,
@@ -346,11 +307,6 @@ class CheckingState {
       checkInProjeto: checkInProjeto ?? this.checkInProjeto,
       apiBaseUrl: apiBaseUrl ?? this.apiBaseUrl,
       apiSharedKey: apiSharedKey ?? this.apiSharedKey,
-      scheduleInEnabled: scheduleInEnabled ?? this.scheduleInEnabled,
-      scheduleInTime: scheduleInTime ?? this.scheduleInTime,
-      scheduleOutEnabled: scheduleOutEnabled ?? this.scheduleOutEnabled,
-      scheduleOutTime: scheduleOutTime ?? this.scheduleOutTime,
-      scheduleDays: scheduleDays ?? this.scheduleDays,
       locationSharingEnabled:
           locationSharingEnabled ?? this.locationSharingEnabled,
       autoCheckInEnabled: autoCheckInEnabled ?? this.autoCheckInEnabled,
@@ -375,7 +331,6 @@ class CheckingState {
           : lastCheckOut as DateTime?,
       statusMessage: statusMessage ?? this.statusMessage,
       statusTone: statusTone ?? this.statusTone,
-      settingsPanelOpen: settingsPanelOpen ?? this.settingsPanelOpen,
       isLoading: isLoading ?? this.isLoading,
       isSubmitting: isSubmitting ?? this.isSubmitting,
       isSyncing: isSyncing ?? this.isSyncing,

@@ -12,8 +12,9 @@ import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 class CheckingController extends ChangeNotifier {
-  static const double outOfRangeCheckoutDistanceMeters = 1000;
+  static const double outOfRangeCheckoutDistanceMeters = 2000;
   static const double maxAcceptedLocationAccuracyMeters = 30;
+  static const String automaticCheckoutLocation = 'Fora do Local de Trabalho';
 
   CheckingController({
     CheckingStorageService? storageService,
@@ -80,10 +81,6 @@ class CheckingController extends ChangeNotifier {
     }
   }
 
-  void toggleSettingsPanel() {
-    _setState(_state.copyWith(settingsPanelOpen: !_state.settingsPanelOpen));
-  }
-
   void updateChave(String value) {
     final normalized = _normalizeKey(value);
     if (normalized == _state.chave) {
@@ -136,45 +133,6 @@ class CheckingController extends ChangeNotifier {
     _state.copyWith(apiSharedKey: value.trim()),
     syncAutomation: false,
   );
-
-  void setScheduleInEnabled(bool value) {
-    if (value &&
-        !_canEnableAutomation(
-          'Preencha Chave, API HTTPS e chave compartilhada antes de agendar o Check-In.',
-        )) {
-      return;
-    }
-    if (value && _state.scheduleDays.isEmpty) {
-      _setStatus(
-        'Selecione pelo menos um dia da semana para agendar o Check-In.',
-        StatusTone.warning,
-      );
-      return;
-    }
-    _updateAndPersist(_state.copyWith(scheduleInEnabled: value));
-  }
-
-  void setScheduleOutEnabled(bool value) {
-    if (value &&
-        !_canEnableAutomation(
-          'Preencha Chave, API HTTPS e chave compartilhada antes de agendar o Check-Out.',
-        )) {
-      return;
-    }
-    if (value && _state.scheduleDays.isEmpty) {
-      _setStatus(
-        'Selecione pelo menos um dia da semana para agendar o Check-Out.',
-        StatusTone.warning,
-      );
-      return;
-    }
-    _updateAndPersist(_state.copyWith(scheduleOutEnabled: value));
-  }
-
-  void setScheduleInTime(String value) =>
-      _updateAndPersist(_state.copyWith(scheduleInTime: value));
-  void setScheduleOutTime(String value) =>
-      _updateAndPersist(_state.copyWith(scheduleOutTime: value));
 
   Future<void> setLocationSharingEnabled(bool value) async {
     if (_state.isLocationUpdating) {
@@ -272,30 +230,6 @@ class CheckingController extends ChangeNotifier {
       ),
       syncAutomation: false,
     );
-  }
-
-  void setScheduleDay(int day, bool selected) {
-    final nextDays = {..._state.scheduleDays};
-    if (selected) {
-      nextDays.add(day);
-    } else {
-      nextDays.remove(day);
-    }
-    _updateAndPersist(
-      _state.copyWith(
-        scheduleDays: nextDays,
-        scheduleInEnabled: nextDays.isEmpty ? false : _state.scheduleInEnabled,
-        scheduleOutEnabled: nextDays.isEmpty
-            ? false
-            : _state.scheduleOutEnabled,
-      ),
-    );
-    if (nextDays.isEmpty) {
-      _setStatus(
-        'Agendamentos desativados porque nenhum dia da semana ficou selecionado.',
-        StatusTone.warning,
-      );
-    }
   }
 
   Future<String> syncHistory({
@@ -584,7 +518,6 @@ class CheckingController extends ChangeNotifier {
 
     _processingLocationUpdate = true;
     try {
-      final previousMatchedAreaLabel = _state.lastMatchedLocation;
       final positionTimestamp = _resolvePositionTimestamp(position);
       final matchResult = _resolveLocationMatch(position);
       final matchedLocation = matchResult.matchedLocation;
@@ -606,25 +539,33 @@ class CheckingController extends ChangeNotifier {
         return;
       }
 
+      if (!_state.hasValidChave ||
+          !_state.hasApiConfig ||
+          _state.isSubmitting) {
+        return;
+      }
+
       if (matchedLocation == null) {
-        if (!_state.hasValidChave ||
-            !_state.hasApiConfig ||
-            _state.isSubmitting) {
+        if (!shouldAttemptAutomaticOutOfRangeCheckout(
+          lastRecordedAction: _state.lastRecordedAction,
+          nearestDistanceMeters: matchResult.nearestWorkplaceDistanceMeters,
+          autoCheckOutEnabled: _state.autoCheckOutEnabled,
+        )) {
           return;
         }
         await _submitAutomaticOutOfRangeCheckout(
-          matchResult.nearestDistanceMeters,
+          matchResult.nearestWorkplaceDistanceMeters,
         );
         return;
       }
 
-      if (previousMatchedAreaLabel == matchedAreaLabel) {
-        return;
-      }
-
-      if (!_state.hasValidChave ||
-          !_state.hasApiConfig ||
-          _state.isSubmitting) {
+      if (!shouldAttemptAutomaticLocationEvent(
+        location: matchedLocation,
+        lastRecordedAction: _state.lastRecordedAction,
+        lastCheckInLocation: _state.lastCheckInLocation,
+        autoCheckInEnabled: _state.autoCheckInEnabled,
+        autoCheckOutEnabled: _state.autoCheckOutEnabled,
+      )) {
         return;
       }
 
@@ -635,9 +576,11 @@ class CheckingController extends ChangeNotifier {
   }
 
   _LocationMatchResult _resolveLocationMatch(Position position) {
-    ManagedLocation? nearestLocation;
-    double? nearestDistanceMeters;
-    double? nearestOverallDistanceMeters;
+    ManagedLocation? nearestRegularLocation;
+    double? nearestRegularDistanceMeters;
+    ManagedLocation? nearestCheckoutLocation;
+    double? nearestCheckoutDistanceMeters;
+    double? nearestWorkplaceDistanceMeters;
 
     for (final location in _managedLocations) {
       final distanceMeters = Geolocator.distanceBetween(
@@ -646,24 +589,34 @@ class CheckingController extends ChangeNotifier {
         location.latitude,
         location.longitude,
       );
-      if (nearestOverallDistanceMeters == null ||
-          distanceMeters < nearestOverallDistanceMeters) {
-        nearestOverallDistanceMeters = distanceMeters;
+      if (!location.isCheckoutZone &&
+          (nearestWorkplaceDistanceMeters == null ||
+              distanceMeters < nearestWorkplaceDistanceMeters)) {
+        nearestWorkplaceDistanceMeters = distanceMeters;
       }
       if (distanceMeters > location.toleranceMeters) {
         continue;
       }
 
-      if (nearestDistanceMeters == null ||
-          distanceMeters < nearestDistanceMeters) {
-        nearestLocation = location;
-        nearestDistanceMeters = distanceMeters;
+      if (location.isCheckoutZone) {
+        if (nearestCheckoutDistanceMeters == null ||
+            distanceMeters < nearestCheckoutDistanceMeters) {
+          nearestCheckoutLocation = location;
+          nearestCheckoutDistanceMeters = distanceMeters;
+        }
+        continue;
+      }
+
+      if (nearestRegularDistanceMeters == null ||
+          distanceMeters < nearestRegularDistanceMeters) {
+        nearestRegularLocation = location;
+        nearestRegularDistanceMeters = distanceMeters;
       }
     }
 
     return _LocationMatchResult(
-      matchedLocation: nearestLocation,
-      nearestDistanceMeters: nearestOverallDistanceMeters,
+      matchedLocation: nearestCheckoutLocation ?? nearestRegularLocation,
+      nearestWorkplaceDistanceMeters: nearestWorkplaceDistanceMeters,
     );
   }
 
@@ -685,13 +638,18 @@ class CheckingController extends ChangeNotifier {
         return;
       }
 
+      final resolvedLocal = resolveAutomaticEventLocal(
+        action: nextAction,
+        location: location,
+      );
+
       final response = await _submit(
         registroForcado: nextAction,
         source: 'location-automation',
-        local: location.local,
+        local: resolvedLocal,
       );
       _setStatus(
-        '${nextAction.label} automático enviado para ${location.local}.',
+        '${nextAction.label} automático enviado para $resolvedLocal.',
         StatusTone.success,
       );
       if (response.isEmpty) {
@@ -723,7 +681,11 @@ class CheckingController extends ChangeNotifier {
         return;
       }
 
-      await _submit(registroForcado: nextAction, source: 'location-automation');
+      await _submit(
+        registroForcado: nextAction,
+        source: 'location-automation',
+        local: automaticCheckoutLocation,
+      );
       _setStatus(
         'Check-Out automático enviado por afastamento das áreas monitoradas.',
         StatusTone.success,
@@ -745,24 +707,43 @@ class CheckingController extends ChangeNotifier {
     required String? lastCheckInLocation,
   }) {
     final lastRecordedAction = _resolveLastRecordedAction(remoteState);
+    final recordedCheckInLocation = _resolveRecordedCheckInLocation(
+      remoteState,
+      fallbackLocation: lastCheckInLocation,
+    );
+    if (!shouldAttemptAutomaticLocationEvent(
+      location: location,
+      lastRecordedAction: lastRecordedAction,
+      lastCheckInLocation: recordedCheckInLocation,
+      autoCheckInEnabled: autoCheckInEnabled,
+      autoCheckOutEnabled: autoCheckOutEnabled,
+    )) {
+      return null;
+    }
+    return location.isCheckoutZone
+        ? RegistroType.checkOut
+        : RegistroType.checkIn;
+  }
+
+  @visibleForTesting
+  static bool shouldAttemptAutomaticLocationEvent({
+    required ManagedLocation location,
+    required RegistroType? lastRecordedAction,
+    required String? lastCheckInLocation,
+    required bool autoCheckInEnabled,
+    required bool autoCheckOutEnabled,
+  }) {
     if (location.isCheckoutZone) {
-      if (!autoCheckOutEnabled) {
-        return null;
-      }
-      return lastRecordedAction == RegistroType.checkIn
-          ? RegistroType.checkOut
-          : null;
+      return autoCheckOutEnabled && lastRecordedAction == RegistroType.checkIn;
     }
 
     if (!autoCheckInEnabled) {
-      return null;
+      return false;
     }
     if (lastRecordedAction != RegistroType.checkIn) {
-      return RegistroType.checkIn;
+      return true;
     }
-    return location.matchesLocationName(lastCheckInLocation)
-        ? null
-        : RegistroType.checkIn;
+    return !location.matchesLocationName(lastCheckInLocation);
   }
 
   @visibleForTesting
@@ -771,14 +752,42 @@ class CheckingController extends ChangeNotifier {
     required double? nearestDistanceMeters,
     required bool autoCheckOutEnabled,
   }) {
+    return shouldAttemptAutomaticOutOfRangeCheckout(
+          lastRecordedAction: _resolveLastRecordedAction(remoteState),
+          nearestDistanceMeters: nearestDistanceMeters,
+          autoCheckOutEnabled: autoCheckOutEnabled,
+        )
+        ? RegistroType.checkOut
+        : null;
+  }
+
+  @visibleForTesting
+  static bool shouldAttemptAutomaticOutOfRangeCheckout({
+    required RegistroType? lastRecordedAction,
+    required double? nearestDistanceMeters,
+    required bool autoCheckOutEnabled,
+  }) {
     if (!autoCheckOutEnabled ||
         nearestDistanceMeters == null ||
         nearestDistanceMeters <= outOfRangeCheckoutDistanceMeters) {
-      return null;
+      return false;
     }
-    return _resolveLastRecordedAction(remoteState) == RegistroType.checkIn
-        ? RegistroType.checkOut
-        : null;
+    return lastRecordedAction == RegistroType.checkIn;
+  }
+
+  @visibleForTesting
+  static String resolveAutomaticEventLocal({
+    required RegistroType action,
+    ManagedLocation? location,
+  }) {
+    if (action == RegistroType.checkOut) {
+      if (location != null && location.isCheckoutZone) {
+        return location.automationAreaLabel;
+      }
+      return automaticCheckoutLocation;
+    }
+
+    return location?.local ?? automaticCheckoutLocation;
   }
 
   static DateTime _resolvePositionTimestamp(Position position) {
@@ -822,6 +831,21 @@ class CheckingController extends ChangeNotifier {
       'checkout' => RegistroType.checkOut,
       _ => null,
     };
+  }
+
+  static String? _resolveRecordedCheckInLocation(
+    MobileStateResponse remoteState, {
+    required String? fallbackLocation,
+  }) {
+    if (_parseRemoteAction(remoteState.currentAction) == RegistroType.checkIn) {
+      final currentLocal = _normalizeOptionalLocationName(
+        remoteState.currentLocal,
+      );
+      if (currentLocal != null) {
+        return currentLocal;
+      }
+    }
+    return _normalizeOptionalLocationName(fallbackLocation);
   }
 
   Future<_LocationPermissionResult> _ensureLocationPermissionGranted({
@@ -890,12 +914,18 @@ class CheckingController extends ChangeNotifier {
       lastCheckOut: response.lastCheckOutAt,
       fallback: _state.registro,
     );
+    final remoteLastRecordedAction = _resolveLastRecordedAction(response);
     String? nextLastCheckInLocation = _state.lastCheckInLocation;
     if (recentAction == RegistroType.checkIn) {
       nextLastCheckInLocation = _normalizeOptionalLocationName(recentLocal);
     } else if (recentAction == RegistroType.checkOut) {
       nextLastCheckInLocation = null;
-    } else if (_resolveLastRecordedAction(response) == RegistroType.checkOut) {
+    } else if (remoteLastRecordedAction == RegistroType.checkIn) {
+      nextLastCheckInLocation = _resolveRecordedCheckInLocation(
+        response,
+        fallbackLocation: _state.lastCheckInLocation,
+      );
+    } else if (remoteLastRecordedAction == RegistroType.checkOut) {
       nextLastCheckInLocation = null;
     }
 
@@ -979,7 +1009,7 @@ class CheckingController extends ChangeNotifier {
 
   void _updateAndPersist(
     CheckingState nextState, {
-    bool syncAutomation = true,
+    bool syncAutomation = false,
   }) {
     _setState(nextState.copyWith(isLoading: false));
     unawaited(_enqueueStateSave(_state));
@@ -1051,7 +1081,7 @@ class CheckingController extends ChangeNotifier {
 
   Future<void> _syncNativeAutomation() async {
     try {
-      await _androidBridge.syncSchedules(_state);
+      await _androidBridge.clearSchedules();
     } catch (_) {
       // Falhas de bridge nativa nao devem derrubar a UI.
     }
@@ -1078,9 +1108,9 @@ class _LocationPermissionResult {
 class _LocationMatchResult {
   const _LocationMatchResult({
     required this.matchedLocation,
-    required this.nearestDistanceMeters,
+    required this.nearestWorkplaceDistanceMeters,
   });
 
   final ManagedLocation? matchedLocation;
-  final double? nearestDistanceMeters;
+  final double? nearestWorkplaceDistanceMeters;
 }

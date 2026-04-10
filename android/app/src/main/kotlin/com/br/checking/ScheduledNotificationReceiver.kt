@@ -50,6 +50,19 @@ class ScheduledNotificationReceiver : BroadcastReceiver() {
                 .apply()
         }
 
+        fun clearStoredSchedules(context: Context) {
+            saveScheduleConfig(
+                context = context,
+                scheduleInEnabled = false,
+                scheduleInTime = "07:45",
+                scheduleOutEnabled = false,
+                scheduleOutTime = "16:45",
+                scheduleDays = emptyList(),
+            )
+            cancelAlarm(context, NOTIFICATION_ID_IN)
+            cancelAlarm(context, NOTIFICATION_ID_OUT)
+        }
+
         fun rescheduleStoredAlarms(context: Context) {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val scheduleInEnabled = prefs.getBoolean(KEY_SCHEDULE_IN_ENABLED, false)

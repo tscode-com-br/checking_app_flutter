@@ -4,6 +4,7 @@ import 'package:checking/src/features/checking/models/checking_state.dart';
 import 'package:checking/src/features/checking/models/managed_location.dart';
 import 'package:checking/src/features/checking/models/mobile_state.dart';
 import 'package:checking/src/features/checking/services/checking_services.dart';
+import 'package:checking/src/features/checking/view/checking_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -122,6 +123,65 @@ void main() {
     expect(CheckingController.isLocationAccuracyPreciseEnough(null), isFalse);
   });
 
+  testWidgets(
+    'clears the key on tap and dismisses the keyboard after four characters',
+    (tester) async {
+      final changedValues = <String>[];
+      var blurCount = 0;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ChaveInputField(
+              value: 'HR70',
+              onChanged: changedValues.add,
+              onBlur: () => blurCount += 1,
+            ),
+          ),
+        ),
+      );
+
+      final field = find.byType(TextField);
+      final editableField = find.byType(EditableText);
+
+      EditableText editableText() {
+        return tester.widget<EditableText>(find.byType(EditableText));
+      }
+
+      expect(editableText().controller.text, 'HR70');
+
+      await tester.tap(editableField);
+      await tester.pump();
+
+      expect(editableText().controller.text, isEmpty);
+      expect(editableText().focusNode.hasFocus, isTrue);
+      expect(changedValues.last, isEmpty);
+
+      await tester.enterText(field, 'ab12');
+      await tester.pump();
+
+      expect(editableText().controller.text, 'AB12');
+      expect(editableText().focusNode.hasFocus, isFalse);
+      expect(changedValues.last, 'AB12');
+      expect(blurCount, 1);
+
+      await tester.tap(editableField);
+      await tester.pump();
+
+      expect(editableText().controller.text, isEmpty);
+      expect(editableText().focusNode.hasFocus, isTrue);
+      expect(changedValues.last, isEmpty);
+
+      await tester.enterText(field, 'cd34');
+      await tester.pump();
+
+      expect(editableText().controller.text, 'CD34');
+      expect(editableText().focusNode.hasFocus, isFalse);
+      expect(changedValues.last, 'CD34');
+      expect(blurCount, 2);
+    },
+  );
+
   test('persists the latest chave after rapid consecutive updates', () async {
     final storageService = _DelayedFakeCheckingStorageService();
     final controller = CheckingController(storageService: storageService);
@@ -181,6 +241,35 @@ void main() {
 
     expect(fromCheckIn, RegistroType.checkOut);
     expect(fromCheckOut, isNull);
+  });
+
+  test(
+    'automatic checkout in checkout zone uses Zona de CheckOut as local',
+    () {
+      final checkoutLocation = ManagedLocation(
+        id: 31,
+        local: 'Zona de CheckOut 4',
+        latitude: 1,
+        longitude: 1,
+        toleranceMeters: 200,
+        updatedAt: DateTime(2026, 4, 10),
+      );
+
+      final resolvedLocal = CheckingController.resolveAutomaticEventLocal(
+        action: RegistroType.checkOut,
+        location: checkoutLocation,
+      );
+
+      expect(resolvedLocal, ManagedLocation.checkoutZoneLabel);
+    },
+  );
+
+  test('automatic checkout out of range uses Fora do Local de Trabalho', () {
+    final resolvedLocal = CheckingController.resolveAutomaticEventLocal(
+      action: RegistroType.checkOut,
+    );
+
+    expect(resolvedLocal, CheckingController.automaticCheckoutLocation);
   });
 
   test('regular locations do not repeat check-in in the same location', () {
@@ -265,7 +354,41 @@ void main() {
     },
   );
 
-  test('out-of-range checkout only happens beyond 1 km after a check-in', () {
+  test(
+    'regular locations reconcile using the current location returned by the API',
+    () {
+      final regularLocation = ManagedLocation(
+        id: 6,
+        local: 'Base P82',
+        latitude: 1,
+        longitude: 1,
+        toleranceMeters: 200,
+        updatedAt: DateTime(2026, 4, 10),
+      );
+
+      final action = CheckingController.resolveAutomaticActionForLocation(
+        remoteState: MobileStateResponse(
+          found: true,
+          chave: 'GH78',
+          nome: 'Teste',
+          projeto: 'P82',
+          currentAction: 'checkin',
+          currentEventTime: DateTime(2026, 4, 10, 8),
+          currentLocal: 'Base P80',
+          lastCheckInAt: DateTime(2026, 4, 10, 8),
+          lastCheckOutAt: DateTime(2026, 4, 9, 18),
+        ),
+        location: regularLocation,
+        autoCheckInEnabled: true,
+        autoCheckOutEnabled: true,
+        lastCheckInLocation: 'Base P82',
+      );
+
+      expect(action, RegistroType.checkIn);
+    },
+  );
+
+  test('out-of-range checkout only happens beyond 2 km after a check-in', () {
     final farFromAllLocations =
         CheckingController.resolveAutomaticActionOutOfRange(
           remoteState: MobileStateResponse(
@@ -278,7 +401,7 @@ void main() {
             lastCheckInAt: DateTime(2026, 4, 10, 8),
             lastCheckOutAt: DateTime(2026, 4, 9, 18),
           ),
-          nearestDistanceMeters: 1200,
+          nearestDistanceMeters: 2100,
           autoCheckOutEnabled: true,
         );
     final stillNearLocations =
@@ -293,7 +416,7 @@ void main() {
             lastCheckInAt: DateTime(2026, 4, 10, 8),
             lastCheckOutAt: DateTime(2026, 4, 9, 18),
           ),
-          nearestDistanceMeters: 950,
+          nearestDistanceMeters: 1950,
           autoCheckOutEnabled: true,
         );
     final alreadyCheckedOut =
@@ -308,7 +431,7 @@ void main() {
             lastCheckInAt: DateTime(2026, 4, 10, 8),
             lastCheckOutAt: DateTime(2026, 4, 10, 18),
           ),
-          nearestDistanceMeters: 1200,
+          nearestDistanceMeters: 2100,
           autoCheckOutEnabled: true,
         );
 
