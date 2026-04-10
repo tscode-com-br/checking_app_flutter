@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:checking/src/core/theme/app_theme.dart';
 import 'package:checking/src/features/checking/controller/checking_controller.dart';
 import 'package:checking/src/features/checking/models/checking_state.dart';
+import 'package:checking/src/features/checking/models/managed_location.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -250,6 +251,17 @@ class _CheckingScreenState extends State<CheckingScreen>
 
   Future<void> _openLocationAutomationSheet() async {
     if (!mounted) return;
+    if (_controller.state.hasApiConfig) {
+      try {
+        await _controller.refreshLocationsCatalog(
+          silent: true,
+          updateStatus: false,
+        );
+      } catch (_) {
+        // Mantem as localizacoes ja carregadas caso a API falhe.
+      }
+    }
+    if (!mounted) return;
     await showModalBottomSheet<void>(
       context: context,
       useSafeArea: true,
@@ -269,6 +281,7 @@ class _CheckingScreenState extends State<CheckingScreen>
               ),
               child: _LocationAutomationSheet(
                 state: state,
+                locations: _controller.managedLocations,
                 onClose: () => Navigator.of(sheetContext).maybePop(),
                 onLocationSharingChanged: (value) {
                   unawaited(_controller.setLocationSharingEnabled(value));
@@ -637,6 +650,7 @@ class _SettingsPanel extends StatelessWidget {
 class _LocationAutomationSheet extends StatelessWidget {
   const _LocationAutomationSheet({
     required this.state,
+    required this.locations,
     required this.onClose,
     required this.onLocationSharingChanged,
     required this.onAutoCheckInChanged,
@@ -644,6 +658,7 @@ class _LocationAutomationSheet extends StatelessWidget {
   });
 
   final CheckingState state;
+  final List<ManagedLocation> locations;
   final VoidCallback onClose;
   final ValueChanged<bool>? onLocationSharingChanged;
   final ValueChanged<bool>? onAutoCheckInChanged;
@@ -651,71 +666,239 @@ class _LocationAutomationSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final lastUpdateText = state.lastLocationUpdateAt == null
+        ? '--'
+        : DateFormat('dd-MM-yyyy HH:mm:ss').format(state.lastLocationUpdateAt!);
+    final highlightLastDetectedLocation =
+        state.lastRecordedAction != RegistroType.checkOut;
+
     return Material(
       color: AppTheme.surface,
       borderRadius: BorderRadius.circular(24),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 44,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: AppTheme.border,
-                  borderRadius: BorderRadius.circular(999),
+      child: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 44,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: AppTheme.border,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 18),
-            Text(
-              'Automatização por Localização',
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 18),
-            _SwitchRow(
-              label: 'Compartilhar Localização',
-              value: state.locationSharingEnabled,
-              onChanged: state.isLocationUpdating
-                  ? null
-                  : onLocationSharingChanged,
-            ),
-            const SizedBox(height: 8),
-            _SwitchRow(
-              label: 'Check-In Automático',
-              value: state.autoCheckInEnabled,
-              onChanged:
-                  !state.locationSharingEnabled || state.isLocationUpdating
-                  ? null
-                  : onAutoCheckInChanged,
-            ),
-            const SizedBox(height: 8),
-            _SwitchRow(
-              label: 'Check-Out Automático',
-              value: state.autoCheckOutEnabled,
-              onChanged:
-                  !state.locationSharingEnabled || state.isLocationUpdating
-                  ? null
-                  : onAutoCheckOutChanged,
-            ),
-            const SizedBox(height: 16),
-            OutlinedButton(
-              onPressed: onClose,
-              style: OutlinedButton.styleFrom(
-                minimumSize: const Size.fromHeight(44),
-                side: const BorderSide(color: AppTheme.border),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
+              const SizedBox(height: 18),
+              Text(
+                'Automatização por Localização',
+                textAlign: TextAlign.center,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
               ),
-              child: const Text('Fechar'),
+              const SizedBox(height: 18),
+              _SwitchRow(
+                label: 'Compartilhar Localização',
+                value: state.locationSharingEnabled,
+                onChanged: state.isLocationUpdating
+                    ? null
+                    : onLocationSharingChanged,
+              ),
+              const SizedBox(height: 8),
+              _SwitchRow(
+                label: 'Check-In Automático',
+                value: state.autoCheckInEnabled,
+                onChanged:
+                    !state.locationSharingEnabled || state.isLocationUpdating
+                    ? null
+                    : onAutoCheckInChanged,
+              ),
+              const SizedBox(height: 8),
+              _SwitchRow(
+                label: 'Check-Out Automático',
+                value: state.autoCheckOutEnabled,
+                onChanged:
+                    !state.locationSharingEnabled || state.isLocationUpdating
+                    ? null
+                    : onAutoCheckOutChanged,
+              ),
+              const SizedBox(height: 16),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Última Atualização:',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.textMain,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      lastUpdateText,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textMain,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _LocationRangesTable(
+                locations: locations,
+                lastDetectedLocation: state.lastDetectedLocation,
+                highlightLastDetectedLocation: highlightLastDetectedLocation,
+              ),
+              const SizedBox(height: 16),
+              OutlinedButton(
+                onPressed: onClose,
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(44),
+                  side: const BorderSide(color: AppTheme.border),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text('Fechar'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LocationRangesTable extends StatelessWidget {
+  const _LocationRangesTable({
+    required this.locations,
+    required this.lastDetectedLocation,
+    required this.highlightLastDetectedLocation,
+  });
+
+  final List<ManagedLocation> locations;
+  final String? lastDetectedLocation;
+  final bool highlightLastDetectedLocation;
+
+  @override
+  Widget build(BuildContext context) {
+    final visibleLocations = locations
+        .where((location) => !location.isCheckoutZone)
+        .toList(growable: false);
+    final rows = visibleLocations.isEmpty
+        ? const <({String local, String range, bool highlighted})>[
+            (local: '--', range: '--', highlighted: false),
+          ]
+        : visibleLocations
+              .map(
+                (location) => (
+                  local: location.local,
+                  range: '${location.toleranceMeters} m',
+                  highlighted:
+                      highlightLastDetectedLocation &&
+                      location.matchesLocationName(lastDetectedLocation),
+                ),
+              )
+              .toList(growable: false);
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: SizedBox(
+            width: constraints.maxWidth,
+            child: Table(
+              defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+              columnWidths: const <int, TableColumnWidth>{
+                0: FlexColumnWidth(),
+                1: FixedColumnWidth(64),
+              },
+              border: TableBorder.all(color: AppTheme.border),
+              children: [
+                const TableRow(
+                  decoration: BoxDecoration(color: Color(0xFFF2F2F7)),
+                  children: [
+                    _LocationTableHeaderCell(label: 'Local'),
+                    _LocationTableHeaderCell(label: 'Range'),
+                  ],
+                ),
+                for (final row in rows)
+                  TableRow(
+                    children: [
+                      _LocationTableValueCell(
+                        value: row.local,
+                        highlighted: row.highlighted,
+                      ),
+                      _LocationTableValueCell(
+                        value: row.range,
+                        highlighted: row.highlighted,
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
+              ],
             ),
-          ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _LocationTableHeaderCell extends StatelessWidget {
+  const _LocationTableHeaderCell({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      child: Text(
+        label,
+        textAlign: TextAlign.center,
+        softWrap: false,
+        style: const TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w700,
+          color: AppTheme.textMain,
+        ),
+      ),
+    );
+  }
+}
+
+class _LocationTableValueCell extends StatelessWidget {
+  const _LocationTableValueCell({
+    required this.value,
+    required this.highlighted,
+    this.textAlign = TextAlign.start,
+  });
+
+  final String value;
+  final bool highlighted;
+  final TextAlign textAlign;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      child: Text(
+        value,
+        textAlign: textAlign,
+        softWrap: false,
+        style: TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+          color: highlighted ? AppTheme.success : AppTheme.textMain,
         ),
       ),
     );

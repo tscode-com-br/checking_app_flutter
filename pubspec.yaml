@@ -68,6 +68,7 @@ flutter:
 
   assets:
     - assets/app_icon.png
+    - assets/img/app_icon_3x.png
 
 flutter_launcher_icons:
   android: true

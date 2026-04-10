@@ -32,13 +32,19 @@ void main() {
     expect(registro, RegistroType.checkIn);
   });
 
-  test('removes legacy HR70 key from persisted state', () {
-    expect(CheckingState.sanitizeChave('HR70'), isEmpty);
+  test('preserves persisted keys including HR70', () {
+    expect(CheckingState.sanitizeChave('HR70'), 'HR70');
     expect(CheckingState.sanitizeChave('AB12'), 'AB12');
+
+    final restored = CheckingState.fromJson({'chave': 'HR70'});
+
+    expect(restored.chave, 'HR70');
   });
 
   test('does not persist last check-in and last check-out timestamps', () {
     final state = CheckingState.initial().copyWith(
+      lastDetectedLocation: 'Portaria Principal',
+      lastLocationUpdateAt: DateTime.utc(2026, 4, 10, 7, 45, 30),
       lastCheckInLocation: 'Escritório Principal',
       lastCheckIn: DateTime(2026, 4, 9, 8),
       lastCheckOut: DateTime(2026, 4, 9, 18),
@@ -48,6 +54,8 @@ void main() {
 
     expect(json.containsKey('lastCheckIn'), isFalse);
     expect(json.containsKey('lastCheckOut'), isFalse);
+    expect(json['lastDetectedLocation'], 'Portaria Principal');
+    expect(json['lastLocationUpdateAt'], '2026-04-10T07:45:30.000Z');
     expect(json['lastCheckInLocation'], 'Escritório Principal');
   });
 
@@ -65,6 +73,20 @@ void main() {
       expect(restored.lastCheckOut, isNull);
     },
   );
+
+  test('resolves the last recorded action from history timestamps', () {
+    final fromCheckIn = CheckingState.initial().copyWith(
+      lastCheckIn: DateTime(2026, 4, 10, 8),
+      lastCheckOut: DateTime(2026, 4, 9, 18),
+    );
+    final fromCheckOut = CheckingState.initial().copyWith(
+      lastCheckIn: DateTime(2026, 4, 9, 8),
+      lastCheckOut: DateTime(2026, 4, 10, 18),
+    );
+
+    expect(fromCheckIn.lastRecordedAction, RegistroType.checkIn);
+    expect(fromCheckOut.lastRecordedAction, RegistroType.checkOut);
+  });
 
   test('identifies checkout zone locations by configured names', () {
     final checkoutLocation = ManagedLocation(

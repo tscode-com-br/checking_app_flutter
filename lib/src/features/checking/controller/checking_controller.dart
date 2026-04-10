@@ -44,6 +44,8 @@ class CheckingController extends ChangeNotifier {
   Future<void> _pendingStateSave = Future.value();
 
   CheckingState get state => _state;
+  List<ManagedLocation> get managedLocations =>
+      List.unmodifiable(_managedLocations);
 
   Future<void> initialize() async {
     if (_initialized) return;
@@ -91,6 +93,8 @@ class CheckingController extends ChangeNotifier {
     final nextState = _state.copyWith(
       chave: normalized,
       lastMatchedLocation: null,
+      lastDetectedLocation: null,
+      lastLocationUpdateAt: null,
       lastCheckInLocation: null,
       lastCheckIn: null,
       lastCheckOut: null,
@@ -371,6 +375,7 @@ class CheckingController extends ChangeNotifier {
       );
       await _locationCatalogService.replaceLocations(response.items);
       _managedLocations = response.items;
+      notifyListeners();
       if (updateStatus) {
         _setStatus(
           '${response.items.length} localizações atualizadas no aplicativo.',
@@ -573,25 +578,35 @@ class CheckingController extends ChangeNotifier {
     if (_processingLocationUpdate || !_state.locationSharingEnabled) {
       return;
     }
-    if (!_state.hasAnyLocationAutomation) {
-      return;
-    }
     if (!isLocationAccuracyPreciseEnough(position.accuracy)) {
       return;
     }
 
     _processingLocationUpdate = true;
     try {
+      final previousMatchedAreaLabel = _state.lastMatchedLocation;
+      final positionTimestamp = _resolvePositionTimestamp(position);
       final matchResult = _resolveLocationMatch(position);
       final matchedLocation = matchResult.matchedLocation;
       final matchedAreaLabel = matchedLocation?.automationAreaLabel;
+      final nextState = matchedLocation == null
+          ? _state.copyWith(
+              lastMatchedLocation: null,
+              lastLocationUpdateAt: positionTimestamp,
+            )
+          : _state.copyWith(
+              lastMatchedLocation: matchedAreaLabel,
+              lastDetectedLocation: matchedLocation.local,
+              lastLocationUpdateAt: positionTimestamp,
+            );
+
+      _updateAndPersist(nextState, syncAutomation: false);
+
+      if (!_state.hasAnyLocationAutomation) {
+        return;
+      }
+
       if (matchedLocation == null) {
-        if (_state.lastMatchedLocation != null) {
-          _updateAndPersist(
-            _state.copyWith(lastMatchedLocation: null),
-            syncAutomation: false,
-          );
-        }
         if (!_state.hasValidChave ||
             !_state.hasApiConfig ||
             _state.isSubmitting) {
@@ -603,14 +618,9 @@ class CheckingController extends ChangeNotifier {
         return;
       }
 
-      if (_state.lastMatchedLocation == matchedAreaLabel) {
+      if (previousMatchedAreaLabel == matchedAreaLabel) {
         return;
       }
-
-      _updateAndPersist(
-        _state.copyWith(lastMatchedLocation: matchedAreaLabel),
-        syncAutomation: false,
-      );
 
       if (!_state.hasValidChave ||
           !_state.hasApiConfig ||
@@ -771,6 +781,10 @@ class CheckingController extends ChangeNotifier {
         : null;
   }
 
+  static DateTime _resolvePositionTimestamp(Position position) {
+    return position.timestamp.toLocal();
+  }
+
   @visibleForTesting
   static bool isLocationAccuracyPreciseEnough(double? accuracyMeters) {
     if (accuracyMeters == null || accuracyMeters.isNaN) {
@@ -902,6 +916,8 @@ class CheckingController extends ChangeNotifier {
     _updateAndPersist(
       _state.copyWith(
         lastMatchedLocation: null,
+        lastDetectedLocation: null,
+        lastLocationUpdateAt: null,
         lastCheckInLocation: null,
         lastCheckIn: null,
         lastCheckOut: null,

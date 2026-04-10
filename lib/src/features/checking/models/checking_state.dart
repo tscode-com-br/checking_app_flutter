@@ -34,8 +34,6 @@ extension ProjetoTypeX on ProjetoType {
 const _unset = Object();
 
 class CheckingState {
-  static const String legacyDefaultChave = 'HR70';
-
   const CheckingState({
     required this.chave,
     required this.registro,
@@ -53,6 +51,8 @@ class CheckingState {
     required this.autoCheckInEnabled,
     required this.autoCheckOutEnabled,
     required this.lastMatchedLocation,
+    required this.lastDetectedLocation,
+    required this.lastLocationUpdateAt,
     required this.lastCheckInLocation,
     required this.lastCheckIn,
     required this.lastCheckOut,
@@ -83,6 +83,8 @@ class CheckingState {
       autoCheckInEnabled: false,
       autoCheckOutEnabled: false,
       lastMatchedLocation: null,
+      lastDetectedLocation: null,
+      lastLocationUpdateAt: null,
       lastCheckInLocation: null,
       lastCheckIn: null,
       lastCheckOut: null,
@@ -151,6 +153,12 @@ class CheckingState {
       lastMatchedLocation: _normalizeOptionalText(
         json['lastMatchedLocation'] as String?,
       ),
+      lastDetectedLocation: _normalizeOptionalText(
+        json['lastDetectedLocation'] as String?,
+      ),
+      lastLocationUpdateAt: _parseOptionalDateTime(
+        json['lastLocationUpdateAt'] as String?,
+      ),
       lastCheckInLocation: _normalizeOptionalText(
         json['lastCheckInLocation'] as String?,
       ),
@@ -182,6 +190,8 @@ class CheckingState {
   final bool autoCheckInEnabled;
   final bool autoCheckOutEnabled;
   final String? lastMatchedLocation;
+  final String? lastDetectedLocation;
+  final DateTime? lastLocationUpdateAt;
   final String? lastCheckInLocation;
   final DateTime? lastCheckIn;
   final DateTime? lastCheckOut;
@@ -202,6 +212,26 @@ class CheckingState {
   bool get hasAnySchedule => scheduleInEnabled || scheduleOutEnabled;
   bool get hasAnyLocationAutomation =>
       autoCheckInEnabled || autoCheckOutEnabled;
+  RegistroType? get lastRecordedAction {
+    final latestCheckIn = lastCheckIn;
+    final latestCheckOut = lastCheckOut;
+    if (latestCheckIn == null && latestCheckOut == null) {
+      return null;
+    }
+    if (latestCheckIn != null && latestCheckOut == null) {
+      return RegistroType.checkIn;
+    }
+    if (latestCheckIn == null && latestCheckOut != null) {
+      return RegistroType.checkOut;
+    }
+    if (latestCheckIn!.isAfter(latestCheckOut!)) {
+      return RegistroType.checkIn;
+    }
+    if (latestCheckOut.isAfter(latestCheckIn)) {
+      return RegistroType.checkOut;
+    }
+    return null;
+  }
 
   InformeType informeFor(RegistroType action) {
     return action == RegistroType.checkIn ? checkInInforme : checkOutInforme;
@@ -212,11 +242,7 @@ class CheckingState {
   }
 
   static String sanitizeChave(String value) {
-    final normalized = value.trim().toUpperCase();
-    if (normalized == legacyDefaultChave) {
-      return '';
-    }
-    return normalized;
+    return value.trim().toUpperCase();
   }
 
   static RegistroType inferSuggestedRegistro({
@@ -250,6 +276,13 @@ class CheckingState {
     return normalized;
   }
 
+  static DateTime? _parseOptionalDateTime(String? value) {
+    if (value == null || value.trim().isEmpty) {
+      return null;
+    }
+    return DateTime.tryParse(value)?.toLocal();
+  }
+
   Map<String, dynamic> toJson() {
     return <String, dynamic>{
       'chave': chave,
@@ -269,6 +302,8 @@ class CheckingState {
       'autoCheckInEnabled': autoCheckInEnabled,
       'autoCheckOutEnabled': autoCheckOutEnabled,
       'lastMatchedLocation': lastMatchedLocation,
+      'lastDetectedLocation': lastDetectedLocation,
+      'lastLocationUpdateAt': lastLocationUpdateAt?.toUtc().toIso8601String(),
       'lastCheckInLocation': lastCheckInLocation,
     };
   }
@@ -290,6 +325,8 @@ class CheckingState {
     bool? autoCheckInEnabled,
     bool? autoCheckOutEnabled,
     Object? lastMatchedLocation = _unset,
+    Object? lastDetectedLocation = _unset,
+    Object? lastLocationUpdateAt = _unset,
     Object? lastCheckInLocation = _unset,
     Object? lastCheckIn = _unset,
     Object? lastCheckOut = _unset,
@@ -321,6 +358,12 @@ class CheckingState {
       lastMatchedLocation: identical(lastMatchedLocation, _unset)
           ? this.lastMatchedLocation
           : lastMatchedLocation as String?,
+      lastDetectedLocation: identical(lastDetectedLocation, _unset)
+          ? this.lastDetectedLocation
+          : lastDetectedLocation as String?,
+      lastLocationUpdateAt: identical(lastLocationUpdateAt, _unset)
+          ? this.lastLocationUpdateAt
+          : lastLocationUpdateAt as DateTime?,
       lastCheckInLocation: identical(lastCheckInLocation, _unset)
           ? this.lastCheckInLocation
           : lastCheckInLocation as String?,
