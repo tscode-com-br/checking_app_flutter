@@ -369,13 +369,18 @@ class CheckingController extends ChangeNotifier {
     _setState(_state.copyWith(isSubmitting: true));
     try {
       final registro = registroForcado ?? _state.registro;
+      final informe = resolveInformeForSubmission(
+        state: _state,
+        registro: registro,
+        source: source,
+      );
       final response = await _apiService.submitEvent(
         baseUrl: _state.apiBaseUrl,
         sharedKey: _state.apiSharedKey,
         chave: _state.chave,
         projeto: _state.projetoFor(registro).apiValue,
         action: registro.apiValue,
-        informe: _state.informeFor(registro).name,
+        informe: informe.name,
         clientEventId: _buildClientEventId(
           prefix: source == 'location-automation' ? 'flutter-auto' : 'flutter',
         ),
@@ -402,6 +407,18 @@ class CheckingController extends ChangeNotifier {
     } finally {
       _setState(_state.copyWith(isSubmitting: false));
     }
+  }
+
+  @visibleForTesting
+  static InformeType resolveInformeForSubmission({
+    required CheckingState state,
+    required RegistroType registro,
+    required String source,
+  }) {
+    if (source == 'location-automation') {
+      return InformeType.normal;
+    }
+    return state.informeFor(registro);
   }
 
   Future<void> _handleNativeAction(String action) async {

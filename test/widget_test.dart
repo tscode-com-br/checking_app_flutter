@@ -186,6 +186,54 @@ void main() {
     expect(response.locationAccuracyThresholdMeters, 45);
   });
 
+  test('manual submissions preserve the selected informe', () {
+    final state = CheckingState.initial().copyWith(
+      checkInInforme: InformeType.retroativo,
+      checkOutInforme: InformeType.retroativo,
+    );
+
+    expect(
+      CheckingController.resolveInformeForSubmission(
+        state: state,
+        registro: RegistroType.checkIn,
+        source: 'manual',
+      ),
+      InformeType.retroativo,
+    );
+    expect(
+      CheckingController.resolveInformeForSubmission(
+        state: state,
+        registro: RegistroType.checkOut,
+        source: 'manual',
+      ),
+      InformeType.retroativo,
+    );
+  });
+
+  test('location automation submissions always use normal informe', () {
+    final state = CheckingState.initial().copyWith(
+      checkInInforme: InformeType.retroativo,
+      checkOutInforme: InformeType.retroativo,
+    );
+
+    expect(
+      CheckingController.resolveInformeForSubmission(
+        state: state,
+        registro: RegistroType.checkIn,
+        source: 'location-automation',
+      ),
+      InformeType.normal,
+    );
+    expect(
+      CheckingController.resolveInformeForSubmission(
+        state: state,
+        registro: RegistroType.checkOut,
+        source: 'location-automation',
+      ),
+      InformeType.normal,
+    );
+  });
+
   testWidgets(
     'clears the key on tap and dismisses the keyboard after four characters',
     (tester) async {
