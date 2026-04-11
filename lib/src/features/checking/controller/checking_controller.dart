@@ -308,8 +308,21 @@ class CheckingController extends ChangeNotifier {
         sharedKey: _state.apiSharedKey,
       );
       await _locationCatalogService.replaceLocations(response.items);
+      final shouldRestartLocationTracking =
+          _state.locationSharingEnabled &&
+          _positionSubscription != null &&
+          _state.locationUpdateIntervalSeconds !=
+              response.locationUpdateIntervalSeconds;
       _managedLocations = response.items;
-      notifyListeners();
+      _updateAndPersist(
+        _state.copyWith(
+          locationUpdateIntervalSeconds: response.locationUpdateIntervalSeconds,
+        ),
+        syncAutomation: false,
+      );
+      if (shouldRestartLocationTracking) {
+        await _restartLocationTracking();
+      }
       if (updateStatus) {
         _setStatus(
           '${response.items.length} localizações atualizadas no aplicativo.',
@@ -487,12 +500,19 @@ class CheckingController extends ChangeNotifier {
     _positionSubscription = null;
   }
 
+  Future<void> _restartLocationTracking() async {
+    await _stopLocationTracking();
+    await _startLocationTracking();
+  }
+
   LocationSettings _buildLocationSettings() {
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
       return AndroidSettings(
         accuracy: LocationAccuracy.best,
         distanceFilter: 0,
-        intervalDuration: const Duration(minutes: 1),
+        intervalDuration: Duration(
+          seconds: max(1, _state.locationUpdateIntervalSeconds),
+        ),
         foregroundNotificationConfig: const ForegroundNotificationConfig(
           notificationTitle: 'Checking',
           notificationText:

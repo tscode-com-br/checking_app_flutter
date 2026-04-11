@@ -42,6 +42,7 @@ class CheckingState {
     required this.checkInProjeto,
     required this.apiBaseUrl,
     required this.apiSharedKey,
+    required this.locationUpdateIntervalSeconds,
     required this.locationSharingEnabled,
     required this.autoCheckInEnabled,
     required this.autoCheckOutEnabled,
@@ -68,6 +69,7 @@ class CheckingState {
       checkInProjeto: ProjetoType.p80,
       apiBaseUrl: CheckingPresetConfig.apiBaseUrl,
       apiSharedKey: CheckingPresetConfig.apiSharedKey,
+      locationUpdateIntervalSeconds: 60,
       locationSharingEnabled: false,
       autoCheckInEnabled: false,
       autoCheckOutEnabled: false,
@@ -127,6 +129,8 @@ class CheckingState {
           json['apiBaseUrl'] as String? ?? CheckingPresetConfig.apiBaseUrl,
       apiSharedKey:
           json['apiSharedKey'] as String? ?? CheckingPresetConfig.apiSharedKey,
+      locationUpdateIntervalSeconds:
+          (json['locationUpdateIntervalSeconds'] as num?)?.toInt() ?? 60,
       locationSharingEnabled: json['locationSharingEnabled'] as bool? ?? false,
       autoCheckInEnabled: json['autoCheckInEnabled'] as bool? ?? false,
       autoCheckOutEnabled: json['autoCheckOutEnabled'] as bool? ?? false,
@@ -160,6 +164,7 @@ class CheckingState {
   final ProjetoType checkInProjeto;
   final String apiBaseUrl;
   final String apiSharedKey;
+  final int locationUpdateIntervalSeconds;
   final bool locationSharingEnabled;
   final bool autoCheckInEnabled;
   final bool autoCheckOutEnabled;
@@ -265,6 +270,7 @@ class CheckingState {
       'checkOutInforme': checkOutInforme.name,
       'checkInProjeto': checkInProjeto.name,
       'apiBaseUrl': apiBaseUrl,
+      'locationUpdateIntervalSeconds': locationUpdateIntervalSeconds,
       'locationSharingEnabled': locationSharingEnabled,
       'autoCheckInEnabled': autoCheckInEnabled,
       'autoCheckOutEnabled': autoCheckOutEnabled,
@@ -283,6 +289,7 @@ class CheckingState {
     ProjetoType? checkInProjeto,
     String? apiBaseUrl,
     String? apiSharedKey,
+    int? locationUpdateIntervalSeconds,
     bool? locationSharingEnabled,
     bool? autoCheckInEnabled,
     bool? autoCheckOutEnabled,
@@ -307,6 +314,8 @@ class CheckingState {
       checkInProjeto: checkInProjeto ?? this.checkInProjeto,
       apiBaseUrl: apiBaseUrl ?? this.apiBaseUrl,
       apiSharedKey: apiSharedKey ?? this.apiSharedKey,
+      locationUpdateIntervalSeconds:
+          locationUpdateIntervalSeconds ?? this.locationUpdateIntervalSeconds,
       locationSharingEnabled:
           locationSharingEnabled ?? this.locationSharingEnabled,
       autoCheckInEnabled: autoCheckInEnabled ?? this.autoCheckInEnabled,

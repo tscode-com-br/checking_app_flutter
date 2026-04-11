@@ -86,7 +86,11 @@ class ManagedLocation {
 }
 
 class LocationCatalogResponse {
-  const LocationCatalogResponse({required this.items, required this.syncedAt});
+  const LocationCatalogResponse({
+    required this.items,
+    required this.syncedAt,
+    required this.locationUpdateIntervalSeconds,
+  });
 
   factory LocationCatalogResponse.fromJson(Map<String, dynamic> json) {
     final rawItems = json['items'] as List<dynamic>? ?? const <dynamic>[];
@@ -97,9 +101,12 @@ class LocationCatalogResponse {
           .toList(growable: false),
       syncedAt:
           ManagedLocation._parseDateTime(json['synced_at']) ?? DateTime.now(),
+      locationUpdateIntervalSeconds:
+          (json['location_update_interval_seconds'] as num?)?.toInt() ?? 60,
     );
   }
 
   final List<ManagedLocation> items;
   final DateTime syncedAt;
+  final int locationUpdateIntervalSeconds;
 }
