@@ -27,13 +27,9 @@ class ManagedLocationCoordinate {
 
 class ManagedLocation {
   static const String checkoutZoneLabel = 'Zona de CheckOut';
-  static final Set<String> _checkoutZoneNames = <String>{
-    'zona de checkout 1',
-    'zona de checkout 2',
-    'zona de checkout 3',
-    'zona de checkout 4',
-    'zona de checkout 5',
-  };
+  static final RegExp _checkoutZoneNamePattern = RegExp(
+    r'^zona de checkout(?: \d+)?$',
+  );
 
   ManagedLocation({
     required this.id,
@@ -103,7 +99,7 @@ class ManagedLocation {
   final DateTime updatedAt;
 
   bool get isCheckoutZone =>
-      _checkoutZoneNames.contains(_normalizeLocationKey(local));
+      _checkoutZoneNamePattern.hasMatch(_normalizeLocationKey(local));
 
   String get automationAreaLabel => isCheckoutZone ? checkoutZoneLabel : local;
 
@@ -178,6 +174,7 @@ class LocationCatalogResponse {
     required this.items,
     required this.syncedAt,
     required this.locationUpdateIntervalSeconds,
+    required this.locationAccuracyThresholdMeters,
   });
 
   factory LocationCatalogResponse.fromJson(Map<String, dynamic> json) {
@@ -191,10 +188,13 @@ class LocationCatalogResponse {
           ManagedLocation._parseDateTime(json['synced_at']) ?? DateTime.now(),
       locationUpdateIntervalSeconds:
           (json['location_update_interval_seconds'] as num?)?.toInt() ?? 60,
+      locationAccuracyThresholdMeters:
+          (json['location_accuracy_threshold_meters'] as num?)?.toInt() ?? 30,
     );
   }
 
   final List<ManagedLocation> items;
   final DateTime syncedAt;
   final int locationUpdateIntervalSeconds;
+  final int locationAccuracyThresholdMeters;
 }

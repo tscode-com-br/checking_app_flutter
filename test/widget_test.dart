@@ -90,8 +90,16 @@ void main() {
   });
 
   test('identifies checkout zone locations by configured names', () {
-    final checkoutLocation = ManagedLocation(
+    final singleCheckoutLocation = ManagedLocation(
       id: 1,
+      local: 'Zona de CheckOut',
+      latitude: 1,
+      longitude: 1,
+      toleranceMeters: 200,
+      updatedAt: DateTime(2026, 4, 10),
+    );
+    final numberedCheckoutLocation = ManagedLocation(
+      id: 2,
       local: 'Zona de CheckOut 3',
       latitude: 1,
       longitude: 1,
@@ -99,7 +107,7 @@ void main() {
       updatedAt: DateTime(2026, 4, 10),
     );
     final regularLocation = ManagedLocation(
-      id: 2,
+      id: 3,
       local: 'Base P80',
       latitude: 1,
       longitude: 1,
@@ -107,9 +115,10 @@ void main() {
       updatedAt: DateTime(2026, 4, 10),
     );
 
-    expect(checkoutLocation.isCheckoutZone, isTrue);
+    expect(singleCheckoutLocation.isCheckoutZone, isTrue);
+    expect(numberedCheckoutLocation.isCheckoutZone, isTrue);
     expect(
-      checkoutLocation.automationAreaLabel,
+      singleCheckoutLocation.automationAreaLabel,
       ManagedLocation.checkoutZoneLabel,
     );
     expect(regularLocation.isCheckoutZone, isFalse);
@@ -120,6 +129,20 @@ void main() {
     expect(CheckingController.isLocationAccuracyPreciseEnough(12), isTrue);
     expect(CheckingController.isLocationAccuracyPreciseEnough(30), isTrue);
     expect(CheckingController.isLocationAccuracyPreciseEnough(30.01), isFalse);
+    expect(
+      CheckingController.isLocationAccuracyPreciseEnough(
+        45,
+        maxAccuracyMeters: 45,
+      ),
+      isTrue,
+    );
+    expect(
+      CheckingController.isLocationAccuracyPreciseEnough(
+        45.01,
+        maxAccuracyMeters: 45,
+      ),
+      isFalse,
+    );
     expect(CheckingController.isLocationAccuracyPreciseEnough(null), isFalse);
   });
 
@@ -149,6 +172,18 @@ void main() {
         );
 
     expect(distanceNearSecondCoordinate, lessThan(1));
+  });
+
+  test('parses location catalog settings from api response', () {
+    final response = LocationCatalogResponse.fromJson({
+      'items': const [],
+      'synced_at': '2026-04-12T08:00:00Z',
+      'location_update_interval_seconds': 75,
+      'location_accuracy_threshold_meters': 45,
+    });
+
+    expect(response.locationUpdateIntervalSeconds, 75);
+    expect(response.locationAccuracyThresholdMeters, 45);
   });
 
   testWidgets(
@@ -227,7 +262,7 @@ void main() {
   test('checkout zone only triggers checkout after a previous check-in', () {
     final checkoutLocation = ManagedLocation(
       id: 3,
-      local: 'Zona de CheckOut 1',
+      local: ManagedLocation.checkoutZoneLabel,
       latitude: 1,
       longitude: 1,
       toleranceMeters: 200,
@@ -276,7 +311,7 @@ void main() {
     () {
       final checkoutLocation = ManagedLocation(
         id: 31,
-        local: 'Zona de CheckOut 4',
+        local: ManagedLocation.checkoutZoneLabel,
         latitude: 1,
         longitude: 1,
         toleranceMeters: 200,

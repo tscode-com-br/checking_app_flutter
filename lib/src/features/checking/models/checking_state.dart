@@ -43,6 +43,7 @@ class CheckingState {
     required this.apiBaseUrl,
     required this.apiSharedKey,
     required this.locationUpdateIntervalSeconds,
+    required this.locationAccuracyThresholdMeters,
     required this.locationSharingEnabled,
     required this.autoCheckInEnabled,
     required this.autoCheckOutEnabled,
@@ -70,6 +71,7 @@ class CheckingState {
       apiBaseUrl: CheckingPresetConfig.apiBaseUrl,
       apiSharedKey: CheckingPresetConfig.apiSharedKey,
       locationUpdateIntervalSeconds: 60,
+      locationAccuracyThresholdMeters: 30,
       locationSharingEnabled: false,
       autoCheckInEnabled: false,
       autoCheckOutEnabled: false,
@@ -131,6 +133,8 @@ class CheckingState {
           json['apiSharedKey'] as String? ?? CheckingPresetConfig.apiSharedKey,
       locationUpdateIntervalSeconds:
           (json['locationUpdateIntervalSeconds'] as num?)?.toInt() ?? 60,
+      locationAccuracyThresholdMeters:
+          (json['locationAccuracyThresholdMeters'] as num?)?.toInt() ?? 30,
       locationSharingEnabled: json['locationSharingEnabled'] as bool? ?? false,
       autoCheckInEnabled: json['autoCheckInEnabled'] as bool? ?? false,
       autoCheckOutEnabled: json['autoCheckOutEnabled'] as bool? ?? false,
@@ -165,6 +169,7 @@ class CheckingState {
   final String apiBaseUrl;
   final String apiSharedKey;
   final int locationUpdateIntervalSeconds;
+  final int locationAccuracyThresholdMeters;
   final bool locationSharingEnabled;
   final bool autoCheckInEnabled;
   final bool autoCheckOutEnabled;
@@ -271,6 +276,7 @@ class CheckingState {
       'checkInProjeto': checkInProjeto.name,
       'apiBaseUrl': apiBaseUrl,
       'locationUpdateIntervalSeconds': locationUpdateIntervalSeconds,
+      'locationAccuracyThresholdMeters': locationAccuracyThresholdMeters,
       'locationSharingEnabled': locationSharingEnabled,
       'autoCheckInEnabled': autoCheckInEnabled,
       'autoCheckOutEnabled': autoCheckOutEnabled,
@@ -290,6 +296,7 @@ class CheckingState {
     String? apiBaseUrl,
     String? apiSharedKey,
     int? locationUpdateIntervalSeconds,
+    int? locationAccuracyThresholdMeters,
     bool? locationSharingEnabled,
     bool? autoCheckInEnabled,
     bool? autoCheckOutEnabled,
@@ -316,6 +323,9 @@ class CheckingState {
       apiSharedKey: apiSharedKey ?? this.apiSharedKey,
       locationUpdateIntervalSeconds:
           locationUpdateIntervalSeconds ?? this.locationUpdateIntervalSeconds,
+      locationAccuracyThresholdMeters:
+          locationAccuracyThresholdMeters ??
+          this.locationAccuracyThresholdMeters,
       locationSharingEnabled:
           locationSharingEnabled ?? this.locationSharingEnabled,
       autoCheckInEnabled: autoCheckInEnabled ?? this.autoCheckInEnabled,

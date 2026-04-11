@@ -13,7 +13,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 class CheckingController extends ChangeNotifier {
   static const double outOfRangeCheckoutDistanceMeters = 2000;
-  static const double maxAcceptedLocationAccuracyMeters = 30;
+  static const double defaultLocationAccuracyThresholdMeters = 30;
   static const String automaticCheckoutLocation = 'Fora do Local de Trabalho';
 
   CheckingController({
@@ -317,6 +317,8 @@ class CheckingController extends ChangeNotifier {
       _updateAndPersist(
         _state.copyWith(
           locationUpdateIntervalSeconds: response.locationUpdateIntervalSeconds,
+          locationAccuracyThresholdMeters:
+              response.locationAccuracyThresholdMeters,
         ),
         syncAutomation: false,
       );
@@ -532,7 +534,10 @@ class CheckingController extends ChangeNotifier {
     if (_processingLocationUpdate || !_state.locationSharingEnabled) {
       return;
     }
-    if (!isLocationAccuracyPreciseEnough(position.accuracy)) {
+    if (!isLocationAccuracyPreciseEnough(
+      position.accuracy,
+      maxAccuracyMeters: _state.locationAccuracyThresholdMeters.toDouble(),
+    )) {
       return;
     }
 
@@ -832,11 +837,14 @@ class CheckingController extends ChangeNotifier {
   }
 
   @visibleForTesting
-  static bool isLocationAccuracyPreciseEnough(double? accuracyMeters) {
+  static bool isLocationAccuracyPreciseEnough(
+    double? accuracyMeters, {
+    double maxAccuracyMeters = defaultLocationAccuracyThresholdMeters,
+  }) {
     if (accuracyMeters == null || accuracyMeters.isNaN) {
       return false;
     }
-    return accuracyMeters <= maxAcceptedLocationAccuracyMeters;
+    return accuracyMeters <= maxAccuracyMeters;
   }
 
   static RegistroType? _resolveLastRecordedAction(
