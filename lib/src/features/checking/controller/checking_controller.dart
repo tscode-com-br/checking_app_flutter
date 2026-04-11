@@ -603,11 +603,10 @@ class CheckingController extends ChangeNotifier {
     double? nearestWorkplaceDistanceMeters;
 
     for (final location in _managedLocations) {
-      final distanceMeters = Geolocator.distanceBetween(
-        position.latitude,
-        position.longitude,
-        location.latitude,
-        location.longitude,
+      final distanceMeters = resolveDistanceToLocation(
+        location: location,
+        latitude: position.latitude,
+        longitude: position.longitude,
       );
       if (!location.isCheckoutZone &&
           (nearestWorkplaceDistanceMeters == null ||
@@ -638,6 +637,24 @@ class CheckingController extends ChangeNotifier {
       matchedLocation: nearestCheckoutLocation ?? nearestRegularLocation,
       nearestWorkplaceDistanceMeters: nearestWorkplaceDistanceMeters,
     );
+  }
+
+  @visibleForTesting
+  static double resolveDistanceToLocation({
+    required ManagedLocation location,
+    required double latitude,
+    required double longitude,
+  }) {
+    return location.coordinates
+        .map(
+          (coordinate) => Geolocator.distanceBetween(
+            latitude,
+            longitude,
+            coordinate.latitude,
+            coordinate.longitude,
+          ),
+        )
+        .reduce(min);
   }
 
   Future<void> _submitAutomaticLocationEvent(ManagedLocation location) async {

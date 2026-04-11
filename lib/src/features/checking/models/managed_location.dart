@@ -1,5 +1,28 @@
+import 'dart:convert';
+
 String _normalizeLocationKey(String value) {
   return value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+}
+
+class ManagedLocationCoordinate {
+  const ManagedLocationCoordinate({
+    required this.latitude,
+    required this.longitude,
+  });
+
+  factory ManagedLocationCoordinate.fromJson(Map<String, dynamic> json) {
+    return ManagedLocationCoordinate(
+      latitude: (json['latitude'] as num?)?.toDouble() ?? 0,
+      longitude: (json['longitude'] as num?)?.toDouble() ?? 0,
+    );
+  }
+
+  final double latitude;
+  final double longitude;
+
+  Map<String, Object?> toJson() {
+    return <String, Object?>{'latitude': latitude, 'longitude': longitude};
+  }
 }
 
 class ManagedLocation {
@@ -12,38 +35,62 @@ class ManagedLocation {
     'zona de checkout 5',
   };
 
-  const ManagedLocation({
+  ManagedLocation({
     required this.id,
     required this.local,
     required this.latitude,
     required this.longitude,
     required this.toleranceMeters,
     required this.updatedAt,
-  });
+    List<ManagedLocationCoordinate>? coordinates,
+  }) : coordinates = List.unmodifiable(
+         (coordinates == null || coordinates.isEmpty)
+             ? <ManagedLocationCoordinate>[
+                 ManagedLocationCoordinate(
+                   latitude: latitude,
+                   longitude: longitude,
+                 ),
+               ]
+             : coordinates,
+       );
 
   factory ManagedLocation.fromApiJson(Map<String, dynamic> json) {
+    final fallbackLatitude = (json['latitude'] as num?)?.toDouble() ?? 0;
+    final fallbackLongitude = (json['longitude'] as num?)?.toDouble() ?? 0;
     return ManagedLocation(
       id: json['id'] as int? ?? 0,
       local: (json['local'] as String? ?? '').trim(),
-      latitude: (json['latitude'] as num?)?.toDouble() ?? 0,
-      longitude: (json['longitude'] as num?)?.toDouble() ?? 0,
+      latitude: fallbackLatitude,
+      longitude: fallbackLongitude,
       toleranceMeters: json['tolerance_meters'] as int? ?? 0,
       updatedAt:
           _parseDateTime(json['updated_at']) ??
           DateTime.fromMillisecondsSinceEpoch(0),
+      coordinates: _parseCoordinates(
+        json['coordinates'],
+        fallbackLatitude: fallbackLatitude,
+        fallbackLongitude: fallbackLongitude,
+      ),
     );
   }
 
   factory ManagedLocation.fromDatabase(Map<String, Object?> row) {
+    final fallbackLatitude = (row['latitude'] as num?)?.toDouble() ?? 0;
+    final fallbackLongitude = (row['longitude'] as num?)?.toDouble() ?? 0;
     return ManagedLocation(
       id: row['id'] as int? ?? 0,
       local: (row['local'] as String? ?? '').trim(),
-      latitude: (row['latitude'] as num?)?.toDouble() ?? 0,
-      longitude: (row['longitude'] as num?)?.toDouble() ?? 0,
+      latitude: fallbackLatitude,
+      longitude: fallbackLongitude,
       toleranceMeters: row['tolerance_meters'] as int? ?? 0,
       updatedAt:
           _parseDateTime(row['updated_at']) ??
           DateTime.fromMillisecondsSinceEpoch(0),
+      coordinates: _parseCoordinates(
+        _decodeCoordinatesJson(row['coordinates_json']),
+        fallbackLatitude: fallbackLatitude,
+        fallbackLongitude: fallbackLongitude,
+      ),
     );
   }
 
@@ -51,6 +98,7 @@ class ManagedLocation {
   final String local;
   final double latitude;
   final double longitude;
+  final List<ManagedLocationCoordinate> coordinates;
   final int toleranceMeters;
   final DateTime updatedAt;
 
@@ -72,9 +120,49 @@ class ManagedLocation {
       'local': local,
       'latitude': latitude,
       'longitude': longitude,
+      'coordinates_json': jsonEncode(
+        coordinates
+            .map((coordinate) => coordinate.toJson())
+            .toList(growable: false),
+      ),
       'tolerance_meters': toleranceMeters,
       'updated_at': updatedAt.toUtc().toIso8601String(),
     };
+  }
+
+  static Object? _decodeCoordinatesJson(Object? value) {
+    if (value is! String || value.isEmpty) {
+      return null;
+    }
+
+    try {
+      return jsonDecode(value);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static List<ManagedLocationCoordinate> _parseCoordinates(
+    Object? value, {
+    required double fallbackLatitude,
+    required double fallbackLongitude,
+  }) {
+    if (value is List) {
+      final parsedCoordinates = value
+          .whereType<Map<String, dynamic>>()
+          .map(ManagedLocationCoordinate.fromJson)
+          .toList(growable: false);
+      if (parsedCoordinates.isNotEmpty) {
+        return parsedCoordinates;
+      }
+    }
+
+    return <ManagedLocationCoordinate>[
+      ManagedLocationCoordinate(
+        latitude: fallbackLatitude,
+        longitude: fallbackLongitude,
+      ),
+    ];
   }
 
   static DateTime? _parseDateTime(Object? value) {

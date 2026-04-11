@@ -123,6 +123,34 @@ void main() {
     expect(CheckingController.isLocationAccuracyPreciseEnough(null), isFalse);
   });
 
+  test('parses multiple coordinates and resolves the nearest point', () {
+    final location = ManagedLocation.fromApiJson({
+      'id': 99,
+      'local': 'Base P80',
+      'latitude': 1.255936,
+      'longitude': 103.611066,
+      'coordinates': [
+        {'latitude': 1.255936, 'longitude': 103.611066},
+        {'latitude': 1.300000, 'longitude': 103.700000},
+      ],
+      'tolerance_meters': 150,
+      'updated_at': '2026-04-11T08:00:00Z',
+    });
+
+    expect(location.coordinates, hasLength(2));
+    expect(location.latitude, 1.255936);
+    expect(location.longitude, 103.611066);
+
+    final distanceNearSecondCoordinate =
+        CheckingController.resolveDistanceToLocation(
+          location: location,
+          latitude: 1.300000,
+          longitude: 103.700000,
+        );
+
+    expect(distanceNearSecondCoordinate, lessThan(1));
+  });
+
   testWidgets(
     'clears the key on tap and dismisses the keyboard after four characters',
     (tester) async {

@@ -43,7 +43,7 @@ class LocationCatalogService {
     final filePath = path.join(databasePath, _databaseName);
     return openDatabase(
       filePath,
-      version: 1,
+      version: 2,
       onCreate: (database, version) async {
         await database.execute('''
           CREATE TABLE $_tableName (
@@ -51,10 +51,18 @@ class LocationCatalogService {
             local TEXT NOT NULL,
             latitude REAL NOT NULL,
             longitude REAL NOT NULL,
+            coordinates_json TEXT,
             tolerance_meters INTEGER NOT NULL,
             updated_at TEXT NOT NULL
           )
         ''');
+      },
+      onUpgrade: (database, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await database.execute(
+            'ALTER TABLE $_tableName ADD COLUMN coordinates_json TEXT',
+          );
+        }
       },
     );
   }
