@@ -4,12 +4,12 @@ Aplicativo Android em Flutter para registro de Check-In e Check-Out do projeto C
 
 ## Versão de publicação
 
-- versão alvo para a Google Play: `1.2.0`
-- versão do app no projeto: `1.2.0+4` em `pubspec.yaml`
+- versão alvo para a Google Play: `1.2.2`
+- versão do app no projeto: `1.2.2+9` em `pubspec.yaml`
 
 ## Escopo atual
 
-- layout responsivo inspirado no app existente em `checking_android`
+- layout responsivo herdado da versao anterior do app
 - persistência local de configuração e histórico básico
 - banco local SQLite para catálogo de localizações
 - armazenamento seguro da chave compartilhada da API
@@ -31,16 +31,16 @@ flutter build apk --debug
 flutter build appbundle --release
 ```
 
-Build de release assistido (versão 1.2.0):
+Build de release assistido (versão 1.2.2):
 
 ```powershell
-pwsh ./scripts/build-play-aab.ps1 -BuildName 1.2.0 -BuildNumber 4
+pwsh ./scripts/build-play-aab.ps1 -BuildName 1.2.2 -BuildNumber 9
 ```
 
 Preflight de publicacao (valida assinatura, qualidade e gera AAB):
 
 ```powershell
-pwsh ./scripts/play-release-preflight.ps1 -BuildName 1.2.0 -BuildNumber 4
+pwsh ./scripts/play-release-preflight.ps1 -BuildName 1.2.2 -BuildNumber 9
 ```
 
 Geracao de upload key (uma unica vez, interativo):
