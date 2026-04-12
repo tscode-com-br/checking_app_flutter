@@ -38,6 +38,11 @@ class _CheckingScreenState extends State<CheckingScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_controller.refreshLocationUpdateIntervalFromSchedule());
+      return;
+    }
+
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
@@ -178,16 +183,6 @@ class _CheckingScreenState extends State<CheckingScreen>
 
   Future<void> _openLocationAutomationSheet() async {
     if (!mounted) return;
-    if (_controller.state.hasApiConfig) {
-      try {
-        await _controller.refreshLocationsCatalog(
-          silent: true,
-          updateStatus: false,
-        );
-      } catch (_) {
-        // Mantem as localizacoes ja carregadas caso a API falhe.
-      }
-    }
     if (!mounted) return;
     await showModalBottomSheet<void>(
       context: context,
@@ -488,6 +483,10 @@ class _LocationAutomationSheet extends StatelessWidget {
     final lastUpdateText = state.lastLocationUpdateAt == null
         ? '--'
         : DateFormat('dd-MM-yyyy HH:mm:ss').format(state.lastLocationUpdateAt!);
+    final locationUpdateIntervalText =
+        state.hasCoordinateUpdateFrequencySchedule
+        ? '${state.locationUpdateIntervalSeconds} segundos'
+        : '--';
     final highlightLastDetectedLocation =
         state.lastRecordedAction != RegistroType.checkOut;
 
@@ -513,7 +512,7 @@ class _LocationAutomationSheet extends StatelessWidget {
               ),
               const SizedBox(height: 18),
               Text(
-                'Automatização por Localização',
+                'Automação por Localização',
                 textAlign: TextAlign.center,
                 style: Theme.of(
                   context,
@@ -561,6 +560,31 @@ class _LocationAutomationSheet extends StatelessWidget {
                   Expanded(
                     child: Text(
                       lastUpdateText,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textMain,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Tempo para atualização da localização:',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.textMain,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      locationUpdateIntervalText,
                       style: const TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,

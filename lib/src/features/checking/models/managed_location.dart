@@ -169,12 +169,84 @@ class ManagedLocation {
   }
 }
 
+class CoordinateUpdateFrequencyRowData {
+  CoordinateUpdateFrequencyRowData({
+    required this.period,
+    required Map<String, int> values,
+  }) : values = Map.unmodifiable(values);
+
+  factory CoordinateUpdateFrequencyRowData.fromJson(Map<String, dynamic> json) {
+    final normalizedValues = <String, int>{};
+    final rawValues = json['values'];
+    if (rawValues is Map) {
+      for (final entry in rawValues.entries) {
+        final normalizedKey = entry.key.toString().trim();
+        if (normalizedKey.isEmpty) {
+          continue;
+        }
+
+        final rawValue = entry.value;
+        final normalizedValue = switch (rawValue) {
+          int() => rawValue,
+          num() => rawValue.toInt(),
+          String() => int.tryParse(rawValue.trim()),
+          _ => null,
+        };
+        if (normalizedValue == null) {
+          continue;
+        }
+        normalizedValues[normalizedKey] = normalizedValue;
+      }
+    }
+
+    return CoordinateUpdateFrequencyRowData(
+      period: (json['period'] as String? ?? '').trim(),
+      values: normalizedValues,
+    );
+  }
+
+  final String period;
+  final Map<String, int> values;
+
+  Map<String, Object?> toJson() {
+    return <String, Object?>{'period': period, 'values': values};
+  }
+
+  static List<String> parseHeaders(Object? value) {
+    if (value is! List) {
+      return const <String>[];
+    }
+
+    return value
+        .map((item) => item.toString().trim())
+        .where((item) => item.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  static List<CoordinateUpdateFrequencyRowData> listFromJson(Object? value) {
+    if (value is! List) {
+      return const <CoordinateUpdateFrequencyRowData>[];
+    }
+
+    return value
+        .whereType<Map>()
+        .map(
+          (item) => CoordinateUpdateFrequencyRowData.fromJson(
+            Map<String, dynamic>.from(item),
+          ),
+        )
+        .where((row) => row.period.isNotEmpty && row.values.isNotEmpty)
+        .toList(growable: false);
+  }
+}
+
 class LocationCatalogResponse {
   const LocationCatalogResponse({
     required this.items,
     required this.syncedAt,
-    required this.locationUpdateIntervalSeconds,
     required this.locationAccuracyThresholdMeters,
+    required this.coordinateUpdateFrequencyHeaders,
+    required this.coordinateUpdateFrequencyRows,
   });
 
   factory LocationCatalogResponse.fromJson(Map<String, dynamic> json) {
@@ -186,15 +258,22 @@ class LocationCatalogResponse {
           .toList(growable: false),
       syncedAt:
           ManagedLocation._parseDateTime(json['synced_at']) ?? DateTime.now(),
-      locationUpdateIntervalSeconds:
-          (json['location_update_interval_seconds'] as num?)?.toInt() ?? 60,
       locationAccuracyThresholdMeters:
           (json['location_accuracy_threshold_meters'] as num?)?.toInt() ?? 30,
+      coordinateUpdateFrequencyHeaders:
+          CoordinateUpdateFrequencyRowData.parseHeaders(
+            json['coordinate_update_frequency_headers'],
+          ),
+      coordinateUpdateFrequencyRows:
+          CoordinateUpdateFrequencyRowData.listFromJson(
+            json['coordinate_update_frequency_rows'],
+          ),
     );
   }
 
   final List<ManagedLocation> items;
   final DateTime syncedAt;
-  final int locationUpdateIntervalSeconds;
   final int locationAccuracyThresholdMeters;
+  final List<String> coordinateUpdateFrequencyHeaders;
+  final List<CoordinateUpdateFrequencyRowData> coordinateUpdateFrequencyRows;
 }

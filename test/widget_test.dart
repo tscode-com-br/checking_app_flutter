@@ -178,13 +178,54 @@ void main() {
     final response = LocationCatalogResponse.fromJson({
       'items': const [],
       'synced_at': '2026-04-12T08:00:00Z',
-      'location_update_interval_seconds': 75,
       'location_accuracy_threshold_meters': 45,
+      'coordinate_update_frequency_headers': const [
+        'Segunda-Feira',
+        'Terça-Feira',
+      ],
+      'coordinate_update_frequency_rows': const [
+        {
+          'period': '08:01 a 09:00',
+          'values': {'Segunda-Feira': 75, 'Terça-Feira': 120},
+        },
+      ],
     });
 
-    expect(response.locationUpdateIntervalSeconds, 75);
     expect(response.locationAccuracyThresholdMeters, 45);
+    expect(response.coordinateUpdateFrequencyHeaders, [
+      'Segunda-Feira',
+      'Terça-Feira',
+    ]);
+    expect(response.coordinateUpdateFrequencyRows, hasLength(1));
+    expect(
+      response.coordinateUpdateFrequencyRows.single.values['Segunda-Feira'],
+      75,
+    );
   });
+
+  test(
+    'resolves location update interval locally from the imported schedule',
+    () {
+      final rows = CoordinateUpdateFrequencyRowData.listFromJson([
+        {
+          'period': '08:01 a 09:00',
+          'values': {'Segunda-Feira': 75, 'Terça-Feira': 120},
+        },
+        {
+          'period': '09:01 a 10:00',
+          'values': {'Segunda-Feira': 180, 'Terça-Feira': 240},
+        },
+      ]);
+
+      expect(
+        CheckingController.resolveLocationUpdateIntervalFromSchedule(
+          rows: rows,
+          referenceTime: DateTime.utc(2025, 1, 6, 0, 30),
+        ),
+        75,
+      );
+    },
+  );
 
   test('manual submissions preserve the selected informe', () {
     final state = CheckingState.initial().copyWith(

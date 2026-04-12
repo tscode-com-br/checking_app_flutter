@@ -33,12 +33,14 @@ class CheckingController extends ChangeNotifier {
   final LocationCatalogService _locationCatalogService;
   final Random _random = Random();
   static const Duration _historyRefreshInterval = Duration(seconds: 5);
+  static const Duration _singaporeUtcOffset = Duration(hours: 8);
 
   CheckingState _state = CheckingState.initial();
   bool _initialized = false;
   DateTime? _lastNativeActionAt;
   RegistroType? _lastNativeAction;
   Timer? _historyRefreshTimer;
+  Timer? _locationUpdateIntervalTimer;
   StreamSubscription<Position>? _positionSubscription;
   List<ManagedLocation> _managedLocations = const [];
   bool _processingLocationUpdate = false;
@@ -52,8 +54,11 @@ class CheckingController extends ChangeNotifier {
     if (_initialized) return;
     _initialized = true;
     try {
-      _state = await _storageService.loadState();
+      _state = _resolveLocationUpdateIntervalState(
+        await _storageService.loadState(),
+      );
       _managedLocations = await _locationCatalogService.loadLocations();
+      _restartLocationUpdateIntervalScheduleTimer();
       notifyListeners();
       if (_state.hasApiConfig) {
         await refreshLocationsCatalog(silent: true, updateStatus: false);
@@ -173,7 +178,14 @@ class CheckingController extends ChangeNotifier {
         return;
       }
 
-      await refreshLocationsCatalog(silent: true, updateStatus: false);
+      if (_managedLocations.isEmpty ||
+          !_state.hasCoordinateUpdateFrequencySchedule) {
+        await refreshLocationsCatalog(silent: true, updateStatus: false);
+      } else {
+        await refreshLocationUpdateIntervalFromSchedule(
+          restartLocationTrackingIfNeeded: false,
+        );
+      }
       _setState(
         _state.copyWith(
           locationSharingEnabled: true,
@@ -308,20 +320,23 @@ class CheckingController extends ChangeNotifier {
         sharedKey: _state.apiSharedKey,
       );
       await _locationCatalogService.replaceLocations(response.items);
+      final nextState = _resolveLocationUpdateIntervalState(
+        _state.copyWith(
+          locationAccuracyThresholdMeters:
+              response.locationAccuracyThresholdMeters,
+          coordinateUpdateFrequencyHeaders:
+              response.coordinateUpdateFrequencyHeaders,
+          coordinateUpdateFrequencyRows: response.coordinateUpdateFrequencyRows,
+        ),
+      );
       final shouldRestartLocationTracking =
           _state.locationSharingEnabled &&
           _positionSubscription != null &&
           _state.locationUpdateIntervalSeconds !=
-              response.locationUpdateIntervalSeconds;
+              nextState.locationUpdateIntervalSeconds;
       _managedLocations = response.items;
-      _updateAndPersist(
-        _state.copyWith(
-          locationUpdateIntervalSeconds: response.locationUpdateIntervalSeconds,
-          locationAccuracyThresholdMeters:
-              response.locationAccuracyThresholdMeters,
-        ),
-        syncAutomation: false,
-      );
+      _updateAndPersist(nextState, syncAutomation: false);
+      _restartLocationUpdateIntervalScheduleTimer();
       if (shouldRestartLocationTracking) {
         await _restartLocationTracking();
       }
@@ -343,6 +358,27 @@ class CheckingController extends ChangeNotifier {
         rethrow;
       }
       return _managedLocations.length;
+    }
+  }
+
+  Future<void> refreshLocationUpdateIntervalFromSchedule({
+    bool restartLocationTrackingIfNeeded = true,
+  }) async {
+    final previousIntervalSeconds = _state.locationUpdateIntervalSeconds;
+    final nextState = _resolveLocationUpdateIntervalState(_state);
+    final intervalChanged =
+        nextState.locationUpdateIntervalSeconds != previousIntervalSeconds;
+
+    if (intervalChanged) {
+      _updateAndPersist(nextState, syncAutomation: false);
+    }
+    _restartLocationUpdateIntervalScheduleTimer();
+
+    if (intervalChanged &&
+        restartLocationTrackingIfNeeded &&
+        _state.locationSharingEnabled &&
+        _positionSubscription != null) {
+      await _restartLocationTracking();
     }
   }
 
@@ -421,6 +457,116 @@ class CheckingController extends ChangeNotifier {
     return state.informeFor(registro);
   }
 
+  @visibleForTesting
+  static ({String dayLabel, String periodLabel})
+  resolveCoordinateUpdateFrequencySlot({DateTime? referenceTime}) {
+    final reference = _toSingaporeTime(referenceTime ?? DateTime.now());
+
+    if (reference.hour == 0 && reference.minute == 0) {
+      final previousReference = reference.subtract(const Duration(days: 1));
+      return (
+        dayLabel: _weekdayToDayLabel(previousReference.weekday),
+        periodLabel: '23:01 a 00:00',
+      );
+    }
+
+    final periodStartHour = reference.minute >= 1
+        ? reference.hour
+        : (reference.hour - 1) % 24;
+    final periodEndHour = (periodStartHour + 1) % 24;
+    return (
+      dayLabel: _weekdayToDayLabel(reference.weekday),
+      periodLabel:
+          '${periodStartHour.toString().padLeft(2, '0')}:01 a ${periodEndHour.toString().padLeft(2, '0')}:00',
+    );
+  }
+
+  @visibleForTesting
+  static int resolveLocationUpdateIntervalFromSchedule({
+    required List<CoordinateUpdateFrequencyRowData> rows,
+    DateTime? referenceTime,
+    int fallbackSeconds = 60,
+  }) {
+    final slot = resolveCoordinateUpdateFrequencySlot(
+      referenceTime: referenceTime,
+    );
+
+    for (final row in rows) {
+      if (row.period != slot.periodLabel) {
+        continue;
+      }
+      return row.values[slot.dayLabel] ?? fallbackSeconds;
+    }
+
+    return fallbackSeconds;
+  }
+
+  static DateTime _toSingaporeTime(DateTime referenceTime) {
+    return referenceTime.toUtc().add(_singaporeUtcOffset);
+  }
+
+  static String _weekdayToDayLabel(int weekday) {
+    return switch (weekday) {
+      DateTime.monday => 'Segunda-Feira',
+      DateTime.tuesday => 'Terça-Feira',
+      DateTime.wednesday => 'Quarta-Feira',
+      DateTime.thursday => 'Quinta-Feira',
+      DateTime.friday => 'Sexta-Feira',
+      DateTime.saturday => 'Sábado',
+      DateTime.sunday => 'Domingo',
+      _ => 'Segunda-Feira',
+    };
+  }
+
+  CheckingState _resolveLocationUpdateIntervalState(
+    CheckingState state, {
+    DateTime? referenceTime,
+  }) {
+    if (!state.hasCoordinateUpdateFrequencySchedule) {
+      return state;
+    }
+
+    final resolvedIntervalSeconds = resolveLocationUpdateIntervalFromSchedule(
+      rows: state.coordinateUpdateFrequencyRows,
+      referenceTime: referenceTime,
+      fallbackSeconds: state.locationUpdateIntervalSeconds,
+    );
+    if (resolvedIntervalSeconds == state.locationUpdateIntervalSeconds) {
+      return state;
+    }
+
+    return state.copyWith(
+      locationUpdateIntervalSeconds: resolvedIntervalSeconds,
+    );
+  }
+
+  Duration _delayUntilNextLocationUpdateIntervalBoundary({
+    DateTime? referenceTime,
+  }) {
+    final referenceUtc = (referenceTime ?? DateTime.now()).toUtc();
+    final referenceSgt = _toSingaporeTime(referenceUtc);
+    final nextBoundarySgt = referenceSgt.minute < 1
+        ? DateTime.utc(
+            referenceSgt.year,
+            referenceSgt.month,
+            referenceSgt.day,
+            referenceSgt.hour,
+            1,
+          )
+        : DateTime.utc(
+            referenceSgt.year,
+            referenceSgt.month,
+            referenceSgt.day,
+            referenceSgt.hour + 1,
+            1,
+          );
+    final nextBoundaryUtc = nextBoundarySgt.subtract(_singaporeUtcOffset);
+    final delay = nextBoundaryUtc.difference(referenceUtc);
+    return delay.isNegative || delay == Duration.zero
+        ? const Duration(seconds: 1)
+        : delay;
+  }
+
   Future<void> _handleNativeAction(String action) async {
     final normalized = action.trim().toLowerCase();
     final registro = switch (normalized) {
@@ -490,6 +636,9 @@ class CheckingController extends ChangeNotifier {
       return;
     }
 
+    await refreshLocationUpdateIntervalFromSchedule(
+      restartLocationTrackingIfNeeded: false,
+    );
     final locationSettings = _buildLocationSettings();
     _positionSubscription =
         Geolocator.getPositionStream(locationSettings: locationSettings).listen(
@@ -1043,6 +1192,25 @@ class CheckingController extends ChangeNotifier {
     _historyRefreshTimer = null;
   }
 
+  void _restartLocationUpdateIntervalScheduleTimer() {
+    _stopLocationUpdateIntervalScheduleTimer();
+    if (!_state.hasCoordinateUpdateFrequencySchedule) {
+      return;
+    }
+
+    _locationUpdateIntervalTimer = Timer(
+      _delayUntilNextLocationUpdateIntervalBoundary(),
+      () {
+        unawaited(refreshLocationUpdateIntervalFromSchedule());
+      },
+    );
+  }
+
+  void _stopLocationUpdateIntervalScheduleTimer() {
+    _locationUpdateIntervalTimer?.cancel();
+    _locationUpdateIntervalTimer = null;
+  }
+
   ProjetoType? _resolveProjeto(String? value) {
     return switch (value) {
       'P80' => ProjetoType.p80,
@@ -1152,6 +1320,7 @@ class CheckingController extends ChangeNotifier {
   @override
   void dispose() {
     _stopHistoryAutoRefresh();
+    _stopLocationUpdateIntervalScheduleTimer();
     unawaited(_stopLocationTracking());
     super.dispose();
   }
