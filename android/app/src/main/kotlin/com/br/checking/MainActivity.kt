@@ -1,14 +1,20 @@
 package com.br.checking
 
+import android.content.ActivityNotFoundException
+import android.content.ComponentName
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.util.Locale
 
 class MainActivity : FlutterActivity() {
 	companion object {
@@ -49,6 +55,9 @@ class MainActivity : FlutterActivity() {
 				clearSchedules()
 				result.success(null)
 			}
+			"requestOemBackgroundSetup" -> {
+				result.success(requestOemBackgroundSetup())
+			}
 			"consumePendingNativeAction" -> {
 				val current = pendingNativeAction
 				pendingNativeAction = null
@@ -60,6 +69,80 @@ class MainActivity : FlutterActivity() {
 
 	private fun clearSchedules() {
 		ScheduledNotificationReceiver.clearStoredSchedules(this)
+	}
+
+	private fun requestOemBackgroundSetup(): Map<String, Any> {
+		val manufacturer = listOfNotNull(Build.MANUFACTURER, Build.BRAND)
+			.joinToString(" ")
+			.lowercase(Locale.ROOT)
+
+		return when {
+			manufacturer.contains("xiaomi") ||
+				manufacturer.contains("redmi") ||
+				manufacturer.contains("poco") -> {
+				val openedSettings = openXiaomiBackgroundSettings()
+				mapOf(
+					"openedSettings" to openedSettings,
+					"message" to if (openedSettings) {
+						"No Xiaomi/HyperOS, revise a tela de Autostart aberta e mantenha a bateria do app em Sem restricoes."
+					} else {
+						"No Xiaomi/HyperOS, habilite Autostart/Background autostart e defina a bateria do app como Sem restricoes."
+					},
+				)
+			}
+			manufacturer.contains("samsung") -> mapOf(
+				"openedSettings" to false,
+				"message" to "Em Samsung, se houver pausas, remova o app de Apps em suspensao/Deep sleeping e, se existir, adicione em Never sleeping apps.",
+			)
+			manufacturer.contains("motorola") || manufacturer.contains("moto") -> mapOf(
+				"openedSettings" to false,
+				"message" to "Em Motorola, se houver pausas, abra Uso de bateria do app e marque Unrestricted; se existir, permita Managing background apps.",
+			)
+			else -> mapOf(
+				"openedSettings" to false,
+				"message" to "",
+			)
+		}
+	}
+
+	private fun openXiaomiBackgroundSettings(): Boolean {
+		val intents = listOf(
+			Intent().apply {
+				component = ComponentName(
+					"com.miui.securitycenter",
+					"com.miui.permcenter.autostart.AutoStartManagementActivity",
+				)
+			},
+			Intent("miui.intent.action.OP_AUTO_START"),
+			Intent().apply {
+				component = ComponentName(
+					"com.miui.securitycenter",
+					"com.miui.appmanager.ApplicationsDetailsActivity",
+				)
+				putExtra("package_name", packageName)
+				putExtra("miui.intent.extra.PACKAGE_NAME", packageName)
+				putExtra("extra_pkgname", packageName)
+			},
+			Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+				data = Uri.fromParts("package", packageName, null)
+			},
+		)
+
+		return intents.any(::startActivitySafely)
+	}
+
+	private fun startActivitySafely(intent: Intent): Boolean {
+		intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+		return try {
+			startActivity(intent)
+			true
+		} catch (_: ActivityNotFoundException) {
+			false
+		} catch (_: SecurityException) {
+			false
+		} catch (_: IllegalArgumentException) {
+			false
+		}
 	}
 
 	private fun handleGeoActionIntent(intent: Intent?) {

@@ -1,5 +1,4 @@
 import 'package:checking/src/features/checking/checking_preset_config.dart';
-import 'package:checking/src/features/checking/models/managed_location.dart';
 
 enum RegistroType { checkIn, checkOut }
 
@@ -45,8 +44,6 @@ class CheckingState {
     required this.apiSharedKey,
     required this.locationUpdateIntervalSeconds,
     required this.locationAccuracyThresholdMeters,
-    required this.coordinateUpdateFrequencyHeaders,
-    required this.coordinateUpdateFrequencyRows,
     required this.locationSharingEnabled,
     required this.autoCheckInEnabled,
     required this.autoCheckOutEnabled,
@@ -75,8 +72,6 @@ class CheckingState {
       apiSharedKey: CheckingPresetConfig.apiSharedKey,
       locationUpdateIntervalSeconds: 60,
       locationAccuracyThresholdMeters: 30,
-      coordinateUpdateFrequencyHeaders: <String>[],
-      coordinateUpdateFrequencyRows: <CoordinateUpdateFrequencyRowData>[],
       locationSharingEnabled: false,
       autoCheckInEnabled: false,
       autoCheckOutEnabled: false,
@@ -96,6 +91,8 @@ class CheckingState {
   }
 
   factory CheckingState.fromJson(Map<String, dynamic> json) {
+    final locationSharingEnabled =
+        json['locationSharingEnabled'] as bool? ?? false;
     final storedRegistro = RegistroType.values.firstWhere(
       (value) => value.name == json['registro'],
       orElse: () => RegistroType.checkIn,
@@ -140,17 +137,9 @@ class CheckingState {
           (json['locationUpdateIntervalSeconds'] as num?)?.toInt() ?? 60,
       locationAccuracyThresholdMeters:
           (json['locationAccuracyThresholdMeters'] as num?)?.toInt() ?? 30,
-      coordinateUpdateFrequencyHeaders:
-          CoordinateUpdateFrequencyRowData.parseHeaders(
-            json['coordinateUpdateFrequencyHeaders'],
-          ),
-      coordinateUpdateFrequencyRows:
-          CoordinateUpdateFrequencyRowData.listFromJson(
-            json['coordinateUpdateFrequencyRows'],
-          ),
-      locationSharingEnabled: json['locationSharingEnabled'] as bool? ?? false,
-      autoCheckInEnabled: json['autoCheckInEnabled'] as bool? ?? false,
-      autoCheckOutEnabled: json['autoCheckOutEnabled'] as bool? ?? false,
+      locationSharingEnabled: locationSharingEnabled,
+      autoCheckInEnabled: locationSharingEnabled,
+      autoCheckOutEnabled: locationSharingEnabled,
       lastMatchedLocation: _normalizeOptionalText(
         json['lastMatchedLocation'] as String?,
       ),
@@ -183,8 +172,6 @@ class CheckingState {
   final String apiSharedKey;
   final int locationUpdateIntervalSeconds;
   final int locationAccuracyThresholdMeters;
-  final List<String> coordinateUpdateFrequencyHeaders;
-  final List<CoordinateUpdateFrequencyRowData> coordinateUpdateFrequencyRows;
   final bool locationSharingEnabled;
   final bool autoCheckInEnabled;
   final bool autoCheckOutEnabled;
@@ -207,8 +194,6 @@ class CheckingState {
   bool get hasValidChave => chave.trim().length == 4;
   bool get hasApiConfig =>
       apiBaseUrl.trim().isNotEmpty && apiSharedKey.trim().isNotEmpty;
-  bool get hasCoordinateUpdateFrequencySchedule =>
-      coordinateUpdateFrequencyRows.isNotEmpty;
   bool get hasAnyLocationAutomation =>
       autoCheckInEnabled || autoCheckOutEnabled;
   RegistroType? get lastRecordedAction {
@@ -294,10 +279,6 @@ class CheckingState {
       'apiBaseUrl': apiBaseUrl,
       'locationUpdateIntervalSeconds': locationUpdateIntervalSeconds,
       'locationAccuracyThresholdMeters': locationAccuracyThresholdMeters,
-      'coordinateUpdateFrequencyHeaders': coordinateUpdateFrequencyHeaders,
-      'coordinateUpdateFrequencyRows': coordinateUpdateFrequencyRows
-          .map((row) => row.toJson())
-          .toList(growable: false),
       'locationSharingEnabled': locationSharingEnabled,
       'autoCheckInEnabled': autoCheckInEnabled,
       'autoCheckOutEnabled': autoCheckOutEnabled,
@@ -318,8 +299,6 @@ class CheckingState {
     String? apiSharedKey,
     int? locationUpdateIntervalSeconds,
     int? locationAccuracyThresholdMeters,
-    List<String>? coordinateUpdateFrequencyHeaders,
-    List<CoordinateUpdateFrequencyRowData>? coordinateUpdateFrequencyRows,
     bool? locationSharingEnabled,
     bool? autoCheckInEnabled,
     bool? autoCheckOutEnabled,
@@ -349,11 +328,6 @@ class CheckingState {
       locationAccuracyThresholdMeters:
           locationAccuracyThresholdMeters ??
           this.locationAccuracyThresholdMeters,
-      coordinateUpdateFrequencyHeaders:
-          coordinateUpdateFrequencyHeaders ??
-          this.coordinateUpdateFrequencyHeaders,
-      coordinateUpdateFrequencyRows:
-          coordinateUpdateFrequencyRows ?? this.coordinateUpdateFrequencyRows,
       locationSharingEnabled:
           locationSharingEnabled ?? this.locationSharingEnabled,
       autoCheckInEnabled: autoCheckInEnabled ?? this.autoCheckInEnabled,

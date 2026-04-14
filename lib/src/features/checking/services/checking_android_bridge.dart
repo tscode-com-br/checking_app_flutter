@@ -3,6 +3,35 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+class CheckingOemBackgroundSetupResult {
+  const CheckingOemBackgroundSetupResult({
+    required this.openedSettings,
+    required this.message,
+  });
+
+  static const empty = CheckingOemBackgroundSetupResult(
+    openedSettings: false,
+    message: '',
+  );
+
+  factory CheckingOemBackgroundSetupResult.fromMap(
+    Map<Object?, Object?>? values,
+  ) {
+    if (values == null) {
+      return empty;
+    }
+
+    final map = Map<Object?, Object?>.from(values);
+    return CheckingOemBackgroundSetupResult(
+      openedSettings: map['openedSettings'] as bool? ?? false,
+      message: (map['message'] as String? ?? '').trim(),
+    );
+  }
+
+  final bool openedSettings;
+  final String message;
+}
+
 class CheckingAndroidBridge {
   static const MethodChannel _channel = MethodChannel('checking/android');
 
@@ -54,6 +83,23 @@ class CheckingAndroidBridge {
     }
 
     await _channel.invokeMethod<void>('clearSchedules');
+  }
+
+  Future<CheckingOemBackgroundSetupResult> requestOemBackgroundSetup() async {
+    if (!_isSupported) {
+      return CheckingOemBackgroundSetupResult.empty;
+    }
+
+    try {
+      final result = await _channel.invokeMapMethod<Object?, Object?>(
+        'requestOemBackgroundSetup',
+      );
+      return CheckingOemBackgroundSetupResult.fromMap(result);
+    } on MissingPluginException {
+      return CheckingOemBackgroundSetupResult.empty;
+    } on PlatformException {
+      return CheckingOemBackgroundSetupResult.empty;
+    }
   }
 
   bool get _isSupported =>

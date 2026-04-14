@@ -4,7 +4,6 @@ import 'dart:math' as math;
 import 'package:checking/src/core/theme/app_theme.dart';
 import 'package:checking/src/features/checking/controller/checking_controller.dart';
 import 'package:checking/src/features/checking/models/checking_state.dart';
-import 'package:checking/src/features/checking/models/managed_location.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -39,7 +38,7 @@ class _CheckingScreenState extends State<CheckingScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      unawaited(_controller.refreshLocationUpdateIntervalFromSchedule());
+      unawaited(_controller.refreshLocationUpdateInterval());
       return;
     }
 
@@ -94,35 +93,26 @@ class _CheckingScreenState extends State<CheckingScreen>
                                 ),
                               ),
                               const SizedBox(height: 12),
-                              _LabeledField(
-                                label: 'Ação',
-                                child: _RadioGroupSelector<RegistroType>(
-                                  value: state.registro,
-                                  options: RegistroType.values,
-                                  labelBuilder: (item) => item.label,
-                                  onChanged: _controller.updateRegistro,
-                                ),
+                              _RadioGroupSelector<RegistroType>(
+                                value: state.registro,
+                                options: RegistroType.values,
+                                labelBuilder: (item) => item.label,
+                                onChanged: _controller.updateRegistro,
                               ),
                               const SizedBox(height: 12),
-                              _LabeledField(
-                                label: 'Informe',
-                                child: _RadioGroupSelector<InformeType>(
-                                  value: state.informe,
-                                  options: InformeType.values,
-                                  labelBuilder: (item) => item.label,
-                                  onChanged: _controller.updateInforme,
-                                ),
+                              _RadioGroupSelector<InformeType>(
+                                value: state.informe,
+                                options: InformeType.values,
+                                labelBuilder: (item) => item.label,
+                                onChanged: _controller.updateInforme,
                               ),
                               const SizedBox(height: 12),
                               if (state.registro == RegistroType.checkIn)
-                                _LabeledField(
-                                  label: 'Projeto',
-                                  child: _RadioGroupSelector<ProjetoType>(
-                                    value: state.projeto,
-                                    options: ProjetoType.values,
-                                    labelBuilder: (item) => item.apiValue,
-                                    onChanged: _controller.updateProjeto,
-                                  ),
+                                _RadioGroupSelector<ProjetoType>(
+                                  value: state.projeto,
+                                  options: ProjetoType.values,
+                                  labelBuilder: (item) => item.apiValue,
+                                  onChanged: _controller.updateProjeto,
                                 ),
                             ],
                           ),
@@ -209,16 +199,9 @@ class _CheckingScreenState extends State<CheckingScreen>
               ),
               child: _LocationAutomationSheet(
                 state: state,
-                locations: _controller.managedLocations,
                 onClose: () => Navigator.of(sheetContext).maybePop(),
                 onLocationSharingChanged: (value) {
                   unawaited(_controller.setLocationSharingEnabled(value));
-                },
-                onAutoCheckInChanged: (value) {
-                  unawaited(_controller.setAutoCheckInEnabled(value));
-                },
-                onAutoCheckOutChanged: (value) {
-                  unawaited(_controller.setAutoCheckOutEnabled(value));
                 },
               ),
             );
@@ -449,9 +432,9 @@ class _HeaderIconButton extends StatelessWidget {
           style: OutlinedButton.styleFrom(
             padding: EdgeInsets.zero,
             backgroundColor: AppTheme.surface,
-            side: const BorderSide(color: AppTheme.border),
+            side: _groupOutlineBorderSide(),
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: _groupOutlineBorderRadius(),
             ),
           ),
           child: Icon(icon, color: iconColor, size: iconSize),
@@ -464,19 +447,13 @@ class _HeaderIconButton extends StatelessWidget {
 class _LocationAutomationSheet extends StatelessWidget {
   const _LocationAutomationSheet({
     required this.state,
-    required this.locations,
     required this.onClose,
     required this.onLocationSharingChanged,
-    required this.onAutoCheckInChanged,
-    required this.onAutoCheckOutChanged,
   });
 
   final CheckingState state;
-  final List<ManagedLocation> locations;
   final VoidCallback onClose;
   final ValueChanged<bool>? onLocationSharingChanged;
-  final ValueChanged<bool>? onAutoCheckInChanged;
-  final ValueChanged<bool>? onAutoCheckOutChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -484,11 +461,10 @@ class _LocationAutomationSheet extends StatelessWidget {
         ? '--'
         : DateFormat('dd-MM-yyyy HH:mm:ss').format(state.lastLocationUpdateAt!);
     final locationUpdateIntervalText =
-        state.hasCoordinateUpdateFrequencySchedule
-        ? '${state.locationUpdateIntervalSeconds} segundos'
-        : '--';
-    final highlightLastDetectedLocation =
-        state.lastRecordedAction != RegistroType.checkOut;
+        CheckingController.describeLocationUpdateInterval(
+          referenceTime: DateTime.now(),
+        );
+    final capturedLocation = state.lastDetectedLocation?.trim();
 
     return Material(
       color: AppTheme.surface,
@@ -520,29 +496,11 @@ class _LocationAutomationSheet extends StatelessWidget {
               ),
               const SizedBox(height: 18),
               _SwitchRow(
-                label: 'Compartilhar Localização',
+                label: 'Check-in/Check-out Automáticos',
                 value: state.locationSharingEnabled,
                 onChanged: state.isLocationUpdating
                     ? null
                     : onLocationSharingChanged,
-              ),
-              const SizedBox(height: 8),
-              _SwitchRow(
-                label: 'Check-In Automático',
-                value: state.autoCheckInEnabled,
-                onChanged:
-                    !state.locationSharingEnabled || state.isLocationUpdating
-                    ? null
-                    : onAutoCheckInChanged,
-              ),
-              const SizedBox(height: 8),
-              _SwitchRow(
-                label: 'Check-Out Automático',
-                value: state.autoCheckOutEnabled,
-                onChanged:
-                    !state.locationSharingEnabled || state.isLocationUpdating
-                    ? null
-                    : onAutoCheckOutChanged,
               ),
               const SizedBox(height: 16),
               Row(
@@ -574,7 +532,7 @@ class _LocationAutomationSheet extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Tempo para atualização da localização:',
+                    'Atualizações:',
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w700,
@@ -595,11 +553,7 @@ class _LocationAutomationSheet extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 12),
-              _LocationRangesTable(
-                locations: locations,
-                lastDetectedLocation: state.lastDetectedLocation,
-                highlightLastDetectedLocation: highlightLastDetectedLocation,
-              ),
+              _CapturedLocationCard(locationName: capturedLocation),
               const SizedBox(height: 16),
               _DangerCloseButton(onPressed: onClose),
             ],
@@ -631,129 +585,41 @@ class _DangerCloseButton extends StatelessWidget {
   }
 }
 
-class _LocationRangesTable extends StatelessWidget {
-  const _LocationRangesTable({
-    required this.locations,
-    required this.lastDetectedLocation,
-    required this.highlightLastDetectedLocation,
-  });
+class _CapturedLocationCard extends StatelessWidget {
+  const _CapturedLocationCard({required this.locationName});
 
-  final List<ManagedLocation> locations;
-  final String? lastDetectedLocation;
-  final bool highlightLastDetectedLocation;
+  final String? locationName;
 
   @override
   Widget build(BuildContext context) {
-    final visibleLocations = locations
-        .where((location) => !location.isCheckoutZone)
-        .toList(growable: false);
-    final rows = visibleLocations.isEmpty
-        ? const <({String local, String range, bool highlighted})>[
-            (local: '--', range: '--', highlighted: false),
-          ]
-        : visibleLocations
-              .map(
-                (location) => (
-                  local: location.local,
-                  range: '${location.toleranceMeters} m',
-                  highlighted:
-                      highlightLastDetectedLocation &&
-                      location.matchesLocationName(lastDetectedLocation),
-                ),
-              )
-              .toList(growable: false);
+    final hasLocation = locationName != null && locationName!.isNotEmpty;
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(12),
-          child: SizedBox(
-            width: constraints.maxWidth,
-            child: Table(
-              defaultVerticalAlignment: TableCellVerticalAlignment.middle,
-              columnWidths: const <int, TableColumnWidth>{
-                0: FlexColumnWidth(),
-                1: FixedColumnWidth(64),
-              },
-              border: TableBorder.all(color: AppTheme.border),
-              children: [
-                const TableRow(
-                  decoration: BoxDecoration(color: Color(0xFFF2F2F7)),
-                  children: [
-                    _LocationTableHeaderCell(label: 'Local'),
-                    _LocationTableHeaderCell(label: 'Range'),
-                  ],
-                ),
-                for (final row in rows)
-                  TableRow(
-                    children: [
-                      _LocationTableValueCell(
-                        value: row.local,
-                        highlighted: row.highlighted,
-                      ),
-                      _LocationTableValueCell(
-                        value: row.range,
-                        highlighted: row.highlighted,
-                        textAlign: TextAlign.center,
-                      ),
-                    ],
-                  ),
-              ],
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+      decoration: _groupOutlineDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Local Capturado',
+            textAlign: TextAlign.start,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: AppTheme.textMain,
             ),
           ),
-        );
-      },
-    );
-  }
-}
-
-class _LocationTableHeaderCell extends StatelessWidget {
-  const _LocationTableHeaderCell({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      child: Text(
-        label,
-        textAlign: TextAlign.center,
-        softWrap: false,
-        style: const TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w700,
-          color: AppTheme.textMain,
-        ),
-      ),
-    );
-  }
-}
-
-class _LocationTableValueCell extends StatelessWidget {
-  const _LocationTableValueCell({
-    required this.value,
-    required this.highlighted,
-    this.textAlign = TextAlign.start,
-  });
-
-  final String value;
-  final bool highlighted;
-  final TextAlign textAlign;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      child: Text(
-        value,
-        textAlign: textAlign,
-        softWrap: false,
-        style: TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w600,
-          color: highlighted ? AppTheme.success : AppTheme.textMain,
-        ),
+          const SizedBox(height: 10),
+          Text(
+            hasLocation ? locationName! : 'Nenhum local capturado',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              color: hasLocation ? AppTheme.success : AppTheme.textSoft,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -768,7 +634,8 @@ class _HistorySection extends StatelessWidget {
   Widget build(BuildContext context) {
     final dateFormatter = DateFormat('dd/MM/yyyy');
     final timeFormatter = DateFormat('HH:mm:ss');
-    return Card(
+    return DecoratedBox(
+      decoration: _groupOutlineDecoration(),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         child: Row(
@@ -852,39 +719,66 @@ class _RadioGroupSelector<T> extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         const spacing = 8.0;
+        const groupPadding = 8.0;
+        final availableWidth = math.max(
+          0.0,
+          constraints.maxWidth - (groupPadding * 2),
+        );
         final itemWidth =
-            ((constraints.maxWidth - (spacing * (options.length - 1))) /
+            ((availableWidth - (spacing * (options.length - 1))) /
                     options.length)
                 .clamp(0, double.infinity)
                 .toDouble();
 
-        return RadioGroup<T>(
-          groupValue: value,
-          onChanged: (nextValue) {
-            if (nextValue != null) {
-              onChanged(nextValue);
-            }
-          },
-          child: Wrap(
-            spacing: spacing,
-            runSpacing: spacing,
-            children: [
-              for (final option in options)
-                SizedBox(
-                  width: itemWidth,
-                  child: _RadioOptionTile<T>(
-                    value: option,
-                    selected: option == value,
-                    label: labelBuilder(option),
-                    onTap: () => onChanged(option),
-                  ),
-                ),
-            ],
+        return DecoratedBox(
+          decoration: _groupOutlineDecoration(),
+          child: Padding(
+            padding: const EdgeInsets.all(groupPadding),
+            child: RadioGroup<T>(
+              groupValue: value,
+              onChanged: (nextValue) {
+                if (nextValue != null) {
+                  onChanged(nextValue);
+                }
+              },
+              child: Wrap(
+                spacing: spacing,
+                runSpacing: spacing,
+                children: [
+                  for (final option in options)
+                    SizedBox(
+                      width: itemWidth,
+                      child: _RadioOptionTile<T>(
+                        value: option,
+                        selected: option == value,
+                        label: labelBuilder(option),
+                        onTap: () => onChanged(option),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ),
         );
       },
     );
   }
+}
+
+BorderRadius _groupOutlineBorderRadius() {
+  return BorderRadius.circular(12);
+}
+
+BorderSide _groupOutlineBorderSide() {
+  return BorderSide(color: AppTheme.border.withValues(alpha: 0.72), width: 0.9);
+}
+
+BoxDecoration _groupOutlineDecoration() {
+  return BoxDecoration(
+    color: AppTheme.surface,
+    borderRadius: _groupOutlineBorderRadius(),
+    border: Border.fromBorderSide(_groupOutlineBorderSide()),
+  );
 }
 
 class _RadioOptionTile<T> extends StatelessWidget {

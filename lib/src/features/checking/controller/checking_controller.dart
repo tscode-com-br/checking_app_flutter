@@ -5,6 +5,8 @@ import 'package:checking/src/features/checking/models/checking_state.dart';
 import 'package:checking/src/features/checking/models/managed_location.dart';
 import 'package:checking/src/features/checking/models/mobile_state.dart';
 import 'package:checking/src/features/checking/services/checking_android_bridge.dart';
+import 'package:checking/src/features/checking/services/checking_background_service.dart';
+import 'package:checking/src/features/checking/services/checking_location_logic.dart';
 import 'package:checking/src/features/checking/services/checking_services.dart';
 import 'package:checking/src/features/checking/services/location_catalog_service.dart';
 import 'package:flutter/foundation.dart';
@@ -12,9 +14,12 @@ import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 class CheckingController extends ChangeNotifier {
-  static const double outOfRangeCheckoutDistanceMeters = 2000;
-  static const double defaultLocationAccuracyThresholdMeters = 30;
-  static const String automaticCheckoutLocation = 'Fora do Local de Trabalho';
+  static const double outOfRangeCheckoutDistanceMeters =
+      CheckingLocationLogic.outOfRangeCheckoutDistanceMeters;
+  static const double defaultLocationAccuracyThresholdMeters =
+      CheckingLocationLogic.defaultLocationAccuracyThresholdMeters;
+  static const String automaticCheckoutLocation =
+      CheckingLocationLogic.automaticCheckoutLocation;
 
   CheckingController({
     CheckingStorageService? storageService,
@@ -33,8 +38,6 @@ class CheckingController extends ChangeNotifier {
   final LocationCatalogService _locationCatalogService;
   final Random _random = Random();
   static const Duration _historyRefreshInterval = Duration(seconds: 5);
-  static const Duration _singaporeUtcOffset = Duration(hours: 8);
-
   CheckingState _state = CheckingState.initial();
   bool _initialized = false;
   DateTime? _lastNativeActionAt;
@@ -45,6 +48,8 @@ class CheckingController extends ChangeNotifier {
   List<ManagedLocation> _managedLocations = const [];
   bool _processingLocationUpdate = false;
   Future<void> _pendingStateSave = Future.value();
+  late final CheckingBackgroundLocationListener _backgroundLocationListener =
+      _handleBackgroundLocationSnapshot;
 
   CheckingState get state => _state;
   List<ManagedLocation> get managedLocations =>
@@ -53,12 +58,17 @@ class CheckingController extends ChangeNotifier {
   Future<void> initialize() async {
     if (_initialized) return;
     _initialized = true;
+    if (CheckingBackgroundLocationService.isSupported) {
+      CheckingBackgroundLocationService.addListener(
+        _backgroundLocationListener,
+      );
+    }
     try {
       _state = _resolveLocationUpdateIntervalState(
         await _storageService.loadState(),
       );
       _managedLocations = await _locationCatalogService.loadLocations();
-      _restartLocationUpdateIntervalScheduleTimer();
+      _restartLocationUpdateIntervalBoundaryTimer();
       notifyListeners();
       if (_state.hasApiConfig) {
         await refreshLocationsCatalog(silent: true, updateStatus: false);
@@ -102,6 +112,7 @@ class CheckingController extends ChangeNotifier {
       lastCheckOut: null,
     );
     _updateAndPersist(nextState, syncAutomation: false);
+    unawaited(_refreshBackgroundLocationService());
 
     if (!_state.hasValidChave || !_state.hasApiConfig) {
       _stopHistoryAutoRefresh();
@@ -130,14 +141,21 @@ class CheckingController extends ChangeNotifier {
     syncAutomation: false,
   );
 
-  void updateApiBaseUrl(String value) => _updateAndPersist(
-    _state.copyWith(apiBaseUrl: value.trim()),
-    syncAutomation: false,
-  );
-  void updateApiSharedKey(String value) => _updateAndPersist(
-    _state.copyWith(apiSharedKey: value.trim()),
-    syncAutomation: false,
-  );
+  void updateApiBaseUrl(String value) {
+    _updateAndPersist(
+      _state.copyWith(apiBaseUrl: value.trim()),
+      syncAutomation: false,
+    );
+    unawaited(_refreshBackgroundLocationService());
+  }
+
+  void updateApiSharedKey(String value) {
+    _updateAndPersist(
+      _state.copyWith(apiSharedKey: value.trim()),
+      syncAutomation: false,
+    );
+    unawaited(_refreshBackgroundLocationService());
+  }
 
   Future<void> setLocationSharingEnabled(bool value) async {
     if (_state.isLocationUpdating) {
@@ -149,12 +167,15 @@ class CheckingController extends ChangeNotifier {
       _updateAndPersist(
         _state.copyWith(
           locationSharingEnabled: false,
+          autoCheckInEnabled: false,
+          autoCheckOutEnabled: false,
           lastMatchedLocation: null,
         ),
         syncAutomation: false,
       );
+      await flushStatePersistence();
       _setStatus(
-        'Compartilhamento de localização desativado.',
+        'Check-in/Check-out automáticos desativados.',
         StatusTone.warning,
       );
       return;
@@ -170,6 +191,8 @@ class CheckingController extends ChangeNotifier {
           _state.copyWith(
             isLocationUpdating: false,
             locationSharingEnabled: false,
+            autoCheckInEnabled: false,
+            autoCheckOutEnabled: false,
           ),
         );
         if (permissionResult.message.isNotEmpty) {
@@ -178,70 +201,79 @@ class CheckingController extends ChangeNotifier {
         return;
       }
 
-      if (_managedLocations.isEmpty ||
-          !_state.hasCoordinateUpdateFrequencySchedule) {
+      final backgroundStartResult =
+          await CheckingBackgroundLocationService.ensureReadyForStart(
+            interactive: true,
+          );
+      if (!backgroundStartResult.ready) {
+        _setState(
+          _state.copyWith(
+            isLocationUpdating: false,
+            locationSharingEnabled: false,
+            autoCheckInEnabled: false,
+            autoCheckOutEnabled: false,
+          ),
+        );
+        if (backgroundStartResult.blockingMessage.isNotEmpty) {
+          _setStatus(backgroundStartResult.blockingMessage, StatusTone.error);
+        }
+        return;
+      }
+
+      if (_managedLocations.isEmpty) {
         await refreshLocationsCatalog(silent: true, updateStatus: false);
       } else {
-        await refreshLocationUpdateIntervalFromSchedule(
+        await refreshLocationUpdateInterval(
           restartLocationTrackingIfNeeded: false,
         );
       }
       _setState(
         _state.copyWith(
           locationSharingEnabled: true,
+          autoCheckInEnabled: true,
+          autoCheckOutEnabled: true,
           isLocationUpdating: false,
         ),
       );
-      unawaited(flushStatePersistence());
+      await flushStatePersistence();
       await _startLocationTracking();
+      final oemSetupResult = await _androidBridge.requestOemBackgroundSetup();
+      final statusSegments = <String>[
+        if (backgroundStartResult.warningMessage.isNotEmpty)
+          backgroundStartResult.warningMessage
+        else
+          'Check-in/Check-out automáticos ativados com monitoramento em segundo plano.',
+        if (oemSetupResult.message.isNotEmpty) oemSetupResult.message,
+      ];
+      final hasWarning =
+          backgroundStartResult.warningMessage.isNotEmpty ||
+          oemSetupResult.message.isNotEmpty;
       _setStatus(
-        'Compartilhamento de localização ativado com monitoramento em segundo plano.',
-        StatusTone.success,
+        statusSegments.join(' '),
+        hasWarning ? StatusTone.warning : StatusTone.success,
       );
     } catch (_) {
       _setState(
         _state.copyWith(
           isLocationUpdating: false,
           locationSharingEnabled: false,
+          autoCheckInEnabled: false,
+          autoCheckOutEnabled: false,
         ),
       );
       _setStatus(
-        'Falha ao ativar o compartilhamento de localização.',
+        'Falha ao ativar o check-in/check-out automáticos.',
         StatusTone.error,
       );
     }
   }
 
   Future<void> setAutoCheckInEnabled(bool value) async {
-    if (value && !_canEnableLocationAutomation()) {
-      return;
-    }
-
-    _updateAndPersist(
-      _state.copyWith(
-        autoCheckInEnabled: value,
-        lastMatchedLocation: value || _state.autoCheckOutEnabled
-            ? _state.lastMatchedLocation
-            : null,
-      ),
-      syncAutomation: false,
-    );
+    await setLocationSharingEnabled(value);
   }
 
   Future<void> setAutoCheckOutEnabled(bool value) async {
-    if (value && !_canEnableLocationAutomation()) {
-      return;
-    }
-
-    _updateAndPersist(
-      _state.copyWith(
-        autoCheckOutEnabled: value,
-        lastMatchedLocation: value || _state.autoCheckInEnabled
-            ? _state.lastMatchedLocation
-            : null,
-      ),
-      syncAutomation: false,
-    );
+    await setLocationSharingEnabled(value);
   }
 
   Future<String> syncHistory({
@@ -324,21 +356,21 @@ class CheckingController extends ChangeNotifier {
         _state.copyWith(
           locationAccuracyThresholdMeters:
               response.locationAccuracyThresholdMeters,
-          coordinateUpdateFrequencyHeaders:
-              response.coordinateUpdateFrequencyHeaders,
-          coordinateUpdateFrequencyRows: response.coordinateUpdateFrequencyRows,
         ),
       );
+      final isTrackingActive = await _isLocationTrackingActive();
       final shouldRestartLocationTracking =
           _state.locationSharingEnabled &&
-          _positionSubscription != null &&
+          isTrackingActive &&
           _state.locationUpdateIntervalSeconds !=
               nextState.locationUpdateIntervalSeconds;
       _managedLocations = response.items;
       _updateAndPersist(nextState, syncAutomation: false);
-      _restartLocationUpdateIntervalScheduleTimer();
+      _restartLocationUpdateIntervalBoundaryTimer();
       if (shouldRestartLocationTracking) {
         await _restartLocationTracking();
+      } else if (_state.locationSharingEnabled) {
+        unawaited(_refreshBackgroundLocationService());
       }
       if (updateStatus) {
         _setStatus(
@@ -361,7 +393,7 @@ class CheckingController extends ChangeNotifier {
     }
   }
 
-  Future<void> refreshLocationUpdateIntervalFromSchedule({
+  Future<void> refreshLocationUpdateInterval({
     bool restartLocationTrackingIfNeeded = true,
   }) async {
     final previousIntervalSeconds = _state.locationUpdateIntervalSeconds;
@@ -372,12 +404,13 @@ class CheckingController extends ChangeNotifier {
     if (intervalChanged) {
       _updateAndPersist(nextState, syncAutomation: false);
     }
-    _restartLocationUpdateIntervalScheduleTimer();
+    _restartLocationUpdateIntervalBoundaryTimer();
 
+    final isTrackingActive = await _isLocationTrackingActive();
     if (intervalChanged &&
         restartLocationTrackingIfNeeded &&
         _state.locationSharingEnabled &&
-        _positionSubscription != null) {
+        isTrackingActive) {
       await _restartLocationTracking();
     }
   }
@@ -430,6 +463,7 @@ class CheckingController extends ChangeNotifier {
         recentAction: registro,
         recentLocal: local,
       );
+      unawaited(_refreshBackgroundLocationService());
       return response.message;
     } catch (error) {
       final message = error is CheckingApiException
@@ -458,113 +492,35 @@ class CheckingController extends ChangeNotifier {
   }
 
   @visibleForTesting
-  static ({String dayLabel, String periodLabel})
-  resolveCoordinateUpdateFrequencySlot({DateTime? referenceTime}) {
-    final reference = _toSingaporeTime(referenceTime ?? DateTime.now());
-
-    if (reference.hour == 0 && reference.minute == 0) {
-      final previousReference = reference.subtract(const Duration(days: 1));
-      return (
-        dayLabel: _weekdayToDayLabel(previousReference.weekday),
-        periodLabel: '23:01 a 00:00',
-      );
-    }
-
-    final periodStartHour = reference.minute >= 1
-        ? reference.hour
-        : (reference.hour - 1) % 24;
-    final periodEndHour = (periodStartHour + 1) % 24;
-    return (
-      dayLabel: _weekdayToDayLabel(reference.weekday),
-      periodLabel:
-          '${periodStartHour.toString().padLeft(2, '0')}:01 a ${periodEndHour.toString().padLeft(2, '0')}:00',
+  static int resolveLocationUpdateIntervalSeconds({DateTime? referenceTime}) {
+    return CheckingLocationLogic.resolveLocationUpdateIntervalSeconds(
+      referenceTime: referenceTime,
     );
   }
 
   @visibleForTesting
-  static int resolveLocationUpdateIntervalFromSchedule({
-    required List<CoordinateUpdateFrequencyRowData> rows,
-    DateTime? referenceTime,
-    int fallbackSeconds = 60,
-  }) {
-    final slot = resolveCoordinateUpdateFrequencySlot(
+  static String describeLocationUpdateInterval({DateTime? referenceTime}) {
+    return CheckingLocationLogic.describeLocationUpdateInterval(
       referenceTime: referenceTime,
     );
-
-    for (final row in rows) {
-      if (row.period != slot.periodLabel) {
-        continue;
-      }
-      return row.values[slot.dayLabel] ?? fallbackSeconds;
-    }
-
-    return fallbackSeconds;
-  }
-
-  static DateTime _toSingaporeTime(DateTime referenceTime) {
-    return referenceTime.toUtc().add(_singaporeUtcOffset);
-  }
-
-  static String _weekdayToDayLabel(int weekday) {
-    return switch (weekday) {
-      DateTime.monday => 'Segunda-Feira',
-      DateTime.tuesday => 'Terça-Feira',
-      DateTime.wednesday => 'Quarta-Feira',
-      DateTime.thursday => 'Quinta-Feira',
-      DateTime.friday => 'Sexta-Feira',
-      DateTime.saturday => 'Sábado',
-      DateTime.sunday => 'Domingo',
-      _ => 'Segunda-Feira',
-    };
   }
 
   CheckingState _resolveLocationUpdateIntervalState(
     CheckingState state, {
     DateTime? referenceTime,
   }) {
-    if (!state.hasCoordinateUpdateFrequencySchedule) {
-      return state;
-    }
-
-    final resolvedIntervalSeconds = resolveLocationUpdateIntervalFromSchedule(
-      rows: state.coordinateUpdateFrequencyRows,
+    return CheckingLocationLogic.resolveLocationUpdateIntervalState(
+      state,
       referenceTime: referenceTime,
-      fallbackSeconds: state.locationUpdateIntervalSeconds,
-    );
-    if (resolvedIntervalSeconds == state.locationUpdateIntervalSeconds) {
-      return state;
-    }
-
-    return state.copyWith(
-      locationUpdateIntervalSeconds: resolvedIntervalSeconds,
     );
   }
 
   Duration _delayUntilNextLocationUpdateIntervalBoundary({
     DateTime? referenceTime,
   }) {
-    final referenceUtc = (referenceTime ?? DateTime.now()).toUtc();
-    final referenceSgt = _toSingaporeTime(referenceUtc);
-    final nextBoundarySgt = referenceSgt.minute < 1
-        ? DateTime.utc(
-            referenceSgt.year,
-            referenceSgt.month,
-            referenceSgt.day,
-            referenceSgt.hour,
-            1,
-          )
-        : DateTime.utc(
-            referenceSgt.year,
-            referenceSgt.month,
-            referenceSgt.day,
-            referenceSgt.hour + 1,
-            1,
-          );
-    final nextBoundaryUtc = nextBoundarySgt.subtract(_singaporeUtcOffset);
-    final delay = nextBoundaryUtc.difference(referenceUtc);
-    return delay.isNegative || delay == Duration.zero
-        ? const Duration(seconds: 1)
-        : delay;
+    return CheckingLocationLogic.delayUntilNextLocationUpdateIntervalBoundary(
+      referenceTime: referenceTime,
+    );
   }
 
   Future<void> _handleNativeAction(String action) async {
@@ -604,13 +560,17 @@ class CheckingController extends ChangeNotifier {
       interactive: false,
     );
     if (!permissionResult.granted) {
+      await _stopLocationTracking();
       _updateAndPersist(
         _state.copyWith(
           locationSharingEnabled: false,
+          autoCheckInEnabled: false,
+          autoCheckOutEnabled: false,
           lastMatchedLocation: null,
         ),
         syncAutomation: false,
       );
+      await flushStatePersistence();
       if (permissionResult.message.isNotEmpty) {
         _setStatus(permissionResult.message, StatusTone.warning);
       }
@@ -621,7 +581,11 @@ class CheckingController extends ChangeNotifier {
       await _startLocationTracking();
     } catch (_) {
       _updateAndPersist(
-        _state.copyWith(locationSharingEnabled: false),
+        _state.copyWith(
+          locationSharingEnabled: false,
+          autoCheckInEnabled: false,
+          autoCheckOutEnabled: false,
+        ),
         syncAutomation: false,
       );
       _setStatus(
@@ -632,13 +596,16 @@ class CheckingController extends ChangeNotifier {
   }
 
   Future<void> _startLocationTracking() async {
+    if (CheckingBackgroundLocationService.isSupported) {
+      await CheckingBackgroundLocationService.start();
+      return;
+    }
+
     if (_positionSubscription != null) {
       return;
     }
 
-    await refreshLocationUpdateIntervalFromSchedule(
-      restartLocationTrackingIfNeeded: false,
-    );
+    await refreshLocationUpdateInterval(restartLocationTrackingIfNeeded: false);
     final locationSettings = _buildLocationSettings();
     _positionSubscription =
         Geolocator.getPositionStream(locationSettings: locationSettings).listen(
@@ -664,11 +631,19 @@ class CheckingController extends ChangeNotifier {
   }
 
   Future<void> _stopLocationTracking() async {
+    if (CheckingBackgroundLocationService.isSupported) {
+      await CheckingBackgroundLocationService.stop();
+    }
     await _positionSubscription?.cancel();
     _positionSubscription = null;
   }
 
   Future<void> _restartLocationTracking() async {
+    if (CheckingBackgroundLocationService.isSupported) {
+      await _refreshBackgroundLocationService();
+      return;
+    }
+
     await _stopLocationTracking();
     await _startLocationTracking();
   }
@@ -767,46 +742,16 @@ class CheckingController extends ChangeNotifier {
   }
 
   _LocationMatchResult _resolveLocationMatch(Position position) {
-    ManagedLocation? nearestRegularLocation;
-    double? nearestRegularDistanceMeters;
-    ManagedLocation? nearestCheckoutLocation;
-    double? nearestCheckoutDistanceMeters;
-    double? nearestWorkplaceDistanceMeters;
-
-    for (final location in _managedLocations) {
-      final distanceMeters = resolveDistanceToLocation(
-        location: location,
-        latitude: position.latitude,
-        longitude: position.longitude,
-      );
-      if (!location.isCheckoutZone &&
-          (nearestWorkplaceDistanceMeters == null ||
-              distanceMeters < nearestWorkplaceDistanceMeters)) {
-        nearestWorkplaceDistanceMeters = distanceMeters;
-      }
-      if (distanceMeters > location.toleranceMeters) {
-        continue;
-      }
-
-      if (location.isCheckoutZone) {
-        if (nearestCheckoutDistanceMeters == null ||
-            distanceMeters < nearestCheckoutDistanceMeters) {
-          nearestCheckoutLocation = location;
-          nearestCheckoutDistanceMeters = distanceMeters;
-        }
-        continue;
-      }
-
-      if (nearestRegularDistanceMeters == null ||
-          distanceMeters < nearestRegularDistanceMeters) {
-        nearestRegularLocation = location;
-        nearestRegularDistanceMeters = distanceMeters;
-      }
-    }
+    final matchResult = CheckingLocationLogic.resolveLocationMatch(
+      managedLocations: _managedLocations,
+      latitude: position.latitude,
+      longitude: position.longitude,
+    );
 
     return _LocationMatchResult(
-      matchedLocation: nearestCheckoutLocation ?? nearestRegularLocation,
-      nearestWorkplaceDistanceMeters: nearestWorkplaceDistanceMeters,
+      matchedLocation: matchResult.matchedLocation,
+      nearestWorkplaceDistanceMeters:
+          matchResult.nearestWorkplaceDistanceMeters,
     );
   }
 
@@ -816,16 +761,11 @@ class CheckingController extends ChangeNotifier {
     required double latitude,
     required double longitude,
   }) {
-    return location.coordinates
-        .map(
-          (coordinate) => Geolocator.distanceBetween(
-            latitude,
-            longitude,
-            coordinate.latitude,
-            coordinate.longitude,
-          ),
-        )
-        .reduce(min);
+    return CheckingLocationLogic.resolveDistanceToLocation(
+      location: location,
+      latitude: latitude,
+      longitude: longitude,
+    );
   }
 
   Future<void> _submitAutomaticLocationEvent(ManagedLocation location) async {
@@ -914,23 +854,13 @@ class CheckingController extends ChangeNotifier {
     required bool autoCheckOutEnabled,
     required String? lastCheckInLocation,
   }) {
-    final lastRecordedAction = _resolveLastRecordedAction(remoteState);
-    final recordedCheckInLocation = _resolveRecordedCheckInLocation(
-      remoteState,
-      fallbackLocation: lastCheckInLocation,
-    );
-    if (!shouldAttemptAutomaticLocationEvent(
+    return CheckingLocationLogic.resolveAutomaticActionForLocation(
+      remoteState: remoteState,
       location: location,
-      lastRecordedAction: lastRecordedAction,
-      lastCheckInLocation: recordedCheckInLocation,
       autoCheckInEnabled: autoCheckInEnabled,
       autoCheckOutEnabled: autoCheckOutEnabled,
-    )) {
-      return null;
-    }
-    return location.isCheckoutZone
-        ? RegistroType.checkOut
-        : RegistroType.checkIn;
+      lastCheckInLocation: lastCheckInLocation,
+    );
   }
 
   @visibleForTesting
@@ -941,17 +871,13 @@ class CheckingController extends ChangeNotifier {
     required bool autoCheckInEnabled,
     required bool autoCheckOutEnabled,
   }) {
-    if (location.isCheckoutZone) {
-      return autoCheckOutEnabled && lastRecordedAction == RegistroType.checkIn;
-    }
-
-    if (!autoCheckInEnabled) {
-      return false;
-    }
-    if (lastRecordedAction != RegistroType.checkIn) {
-      return true;
-    }
-    return !location.matchesLocationName(lastCheckInLocation);
+    return CheckingLocationLogic.shouldAttemptAutomaticLocationEvent(
+      location: location,
+      lastRecordedAction: lastRecordedAction,
+      lastCheckInLocation: lastCheckInLocation,
+      autoCheckInEnabled: autoCheckInEnabled,
+      autoCheckOutEnabled: autoCheckOutEnabled,
+    );
   }
 
   @visibleForTesting
@@ -960,13 +886,11 @@ class CheckingController extends ChangeNotifier {
     required double? nearestDistanceMeters,
     required bool autoCheckOutEnabled,
   }) {
-    return shouldAttemptAutomaticOutOfRangeCheckout(
-          lastRecordedAction: _resolveLastRecordedAction(remoteState),
-          nearestDistanceMeters: nearestDistanceMeters,
-          autoCheckOutEnabled: autoCheckOutEnabled,
-        )
-        ? RegistroType.checkOut
-        : null;
+    return CheckingLocationLogic.resolveAutomaticActionOutOfRange(
+      remoteState: remoteState,
+      nearestDistanceMeters: nearestDistanceMeters,
+      autoCheckOutEnabled: autoCheckOutEnabled,
+    );
   }
 
   @visibleForTesting
@@ -975,12 +899,11 @@ class CheckingController extends ChangeNotifier {
     required double? nearestDistanceMeters,
     required bool autoCheckOutEnabled,
   }) {
-    if (!autoCheckOutEnabled ||
-        nearestDistanceMeters == null ||
-        nearestDistanceMeters <= outOfRangeCheckoutDistanceMeters) {
-      return false;
-    }
-    return lastRecordedAction == RegistroType.checkIn;
+    return CheckingLocationLogic.shouldAttemptAutomaticOutOfRangeCheckout(
+      lastRecordedAction: lastRecordedAction,
+      nearestDistanceMeters: nearestDistanceMeters,
+      autoCheckOutEnabled: autoCheckOutEnabled,
+    );
   }
 
   @visibleForTesting
@@ -988,18 +911,14 @@ class CheckingController extends ChangeNotifier {
     required RegistroType action,
     ManagedLocation? location,
   }) {
-    if (action == RegistroType.checkOut) {
-      if (location != null && location.isCheckoutZone) {
-        return location.automationAreaLabel;
-      }
-      return automaticCheckoutLocation;
-    }
-
-    return location?.local ?? automaticCheckoutLocation;
+    return CheckingLocationLogic.resolveAutomaticEventLocal(
+      action: action,
+      location: location,
+    );
   }
 
   static DateTime _resolvePositionTimestamp(Position position) {
-    return position.timestamp.toLocal();
+    return CheckingLocationLogic.resolvePositionTimestamp(position);
   }
 
   @visibleForTesting
@@ -1007,62 +926,20 @@ class CheckingController extends ChangeNotifier {
     double? accuracyMeters, {
     double maxAccuracyMeters = defaultLocationAccuracyThresholdMeters,
   }) {
-    if (accuracyMeters == null || accuracyMeters.isNaN) {
-      return false;
-    }
-    return accuracyMeters <= maxAccuracyMeters;
-  }
-
-  static RegistroType? _resolveLastRecordedAction(
-    MobileStateResponse remoteState,
-  ) {
-    final lastCheckInAt = remoteState.lastCheckInAt;
-    final lastCheckOutAt = remoteState.lastCheckOutAt;
-    if (lastCheckInAt == null && lastCheckOutAt == null) {
-      return _parseRemoteAction(remoteState.currentAction);
-    }
-    if (lastCheckInAt != null && lastCheckOutAt == null) {
-      return RegistroType.checkIn;
-    }
-    if (lastCheckInAt == null && lastCheckOutAt != null) {
-      return RegistroType.checkOut;
-    }
-    if (lastCheckInAt!.isAfter(lastCheckOutAt!)) {
-      return RegistroType.checkIn;
-    }
-    if (lastCheckOutAt.isAfter(lastCheckInAt)) {
-      return RegistroType.checkOut;
-    }
-    return _parseRemoteAction(remoteState.currentAction);
-  }
-
-  static RegistroType? _parseRemoteAction(String? value) {
-    return switch (value?.trim().toLowerCase()) {
-      'checkin' => RegistroType.checkIn,
-      'checkout' => RegistroType.checkOut,
-      _ => null,
-    };
-  }
-
-  static String? _resolveRecordedCheckInLocation(
-    MobileStateResponse remoteState, {
-    required String? fallbackLocation,
-  }) {
-    if (_parseRemoteAction(remoteState.currentAction) == RegistroType.checkIn) {
-      final currentLocal = _normalizeOptionalLocationName(
-        remoteState.currentLocal,
-      );
-      if (currentLocal != null) {
-        return currentLocal;
-      }
-    }
-    return _normalizeOptionalLocationName(fallbackLocation);
+    return CheckingLocationLogic.isLocationAccuracyPreciseEnough(
+      accuracyMeters,
+      maxAccuracyMeters: maxAccuracyMeters,
+    );
   }
 
   Future<_LocationPermissionResult> _ensureLocationPermissionGranted({
     required bool interactive,
   }) async {
-    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    var serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled && interactive) {
+      await Geolocator.openLocationSettings();
+      serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    }
     if (!serviceEnabled) {
       return const _LocationPermissionResult(
         granted: false,
@@ -1100,7 +977,11 @@ class CheckingController extends ChangeNotifier {
       );
     }
 
-    final accuracyStatus = await Geolocator.getLocationAccuracy();
+    var accuracyStatus = await Geolocator.getLocationAccuracy();
+    if (accuracyStatus == LocationAccuracyStatus.reduced && interactive) {
+      await openAppSettings();
+      accuracyStatus = await Geolocator.getLocationAccuracy();
+    }
     if (accuracyStatus == LocationAccuracyStatus.reduced) {
       return const _LocationPermissionResult(
         granted: false,
@@ -1120,35 +1001,15 @@ class CheckingController extends ChangeNotifier {
     RegistroType? recentAction,
     String? recentLocal,
   }) {
-    final suggestedRegistro = CheckingState.inferSuggestedRegistro(
-      lastCheckIn: response.lastCheckInAt,
-      lastCheckOut: response.lastCheckOutAt,
-      fallback: _state.registro,
-    );
-    final remoteLastRecordedAction = _resolveLastRecordedAction(response);
-    String? nextLastCheckInLocation = _state.lastCheckInLocation;
-    if (recentAction == RegistroType.checkIn) {
-      nextLastCheckInLocation = _normalizeOptionalLocationName(recentLocal);
-    } else if (recentAction == RegistroType.checkOut) {
-      nextLastCheckInLocation = null;
-    } else if (remoteLastRecordedAction == RegistroType.checkIn) {
-      nextLastCheckInLocation = _resolveRecordedCheckInLocation(
-        response,
-        fallbackLocation: _state.lastCheckInLocation,
-      );
-    } else if (remoteLastRecordedAction == RegistroType.checkOut) {
-      nextLastCheckInLocation = null;
-    }
-
     _updateAndPersist(
-      _state.copyWith(
-        lastCheckIn: response.lastCheckInAt,
-        lastCheckOut: response.lastCheckOutAt,
-        lastCheckInLocation: nextLastCheckInLocation,
-        registro: suggestedRegistro,
-        checkInProjeto: _resolveProjeto(response.projeto) ?? _state.projeto,
-        statusMessage: updateStatus ? statusMessage : _state.statusMessage,
-        statusTone: updateStatus ? tone : _state.statusTone,
+      CheckingLocationLogic.applyRemoteState(
+        currentState: _state,
+        response: response,
+        statusMessage: statusMessage,
+        tone: tone,
+        updateStatus: updateStatus,
+        recentAction: recentAction,
+        recentLocal: recentLocal,
       ),
     );
   }
@@ -1192,32 +1053,87 @@ class CheckingController extends ChangeNotifier {
     _historyRefreshTimer = null;
   }
 
-  void _restartLocationUpdateIntervalScheduleTimer() {
-    _stopLocationUpdateIntervalScheduleTimer();
-    if (!_state.hasCoordinateUpdateFrequencySchedule) {
-      return;
-    }
-
+  void _restartLocationUpdateIntervalBoundaryTimer() {
+    _stopLocationUpdateIntervalBoundaryTimer();
     _locationUpdateIntervalTimer = Timer(
       _delayUntilNextLocationUpdateIntervalBoundary(),
       () {
-        unawaited(refreshLocationUpdateIntervalFromSchedule());
+        unawaited(refreshLocationUpdateInterval());
       },
     );
   }
 
-  void _stopLocationUpdateIntervalScheduleTimer() {
+  void _stopLocationUpdateIntervalBoundaryTimer() {
     _locationUpdateIntervalTimer?.cancel();
     _locationUpdateIntervalTimer = null;
   }
 
-  ProjetoType? _resolveProjeto(String? value) {
-    return switch (value) {
-      'P80' => ProjetoType.p80,
-      'P82' => ProjetoType.p82,
-      'P83' => ProjetoType.p83,
-      _ => null,
-    };
+  Future<bool> _isLocationTrackingActive() async {
+    if (CheckingBackgroundLocationService.isSupported) {
+      return CheckingBackgroundLocationService.isRunning();
+    }
+    return _positionSubscription != null;
+  }
+
+  Future<void> _refreshBackgroundLocationService() async {
+    if (!CheckingBackgroundLocationService.isSupported) {
+      return;
+    }
+
+    if (!_state.locationSharingEnabled) {
+      await CheckingBackgroundLocationService.stop();
+      return;
+    }
+
+    final permissionResult = await _ensureLocationPermissionGranted(
+      interactive: false,
+    );
+    if (!permissionResult.granted) {
+      await CheckingBackgroundLocationService.stop();
+      return;
+    }
+
+    final readiness =
+        await CheckingBackgroundLocationService.ensureReadyForStart(
+          interactive: false,
+        );
+    if (!readiness.ready) {
+      await CheckingBackgroundLocationService.stop();
+      return;
+    }
+
+    await flushStatePersistence();
+    await CheckingBackgroundLocationService.start();
+    await CheckingBackgroundLocationService.requestRefresh();
+  }
+
+  void _handleBackgroundLocationSnapshot(
+    CheckingBackgroundLocationSnapshot snapshot,
+  ) {
+    final hasStatusUpdate = snapshot.statusMessage.isNotEmpty;
+    _setState(
+      _state.copyWith(
+        registro: snapshot.registro,
+        checkInProjeto: snapshot.checkInProjeto,
+        locationSharingEnabled: snapshot.locationSharingEnabled,
+        autoCheckInEnabled: snapshot.locationSharingEnabled,
+        autoCheckOutEnabled: snapshot.locationSharingEnabled,
+        locationUpdateIntervalSeconds: snapshot.locationUpdateIntervalSeconds,
+        locationAccuracyThresholdMeters:
+            snapshot.locationAccuracyThresholdMeters,
+        lastMatchedLocation: snapshot.lastMatchedLocation,
+        lastDetectedLocation: snapshot.lastDetectedLocation,
+        lastLocationUpdateAt: snapshot.lastLocationUpdateAt,
+        lastCheckInLocation: snapshot.lastCheckInLocation,
+        lastCheckIn: snapshot.lastCheckIn,
+        lastCheckOut: snapshot.lastCheckOut,
+        statusMessage: hasStatusUpdate
+            ? snapshot.statusMessage
+            : _state.statusMessage,
+        statusTone: hasStatusUpdate ? snapshot.statusTone : _state.statusTone,
+        isLocationUpdating: false,
+      ),
+    );
   }
 
   String _buildClientEventId({required String prefix}) {
@@ -1227,14 +1143,6 @@ class CheckingController extends ChangeNotifier {
         .toRadixString(16)
         .padLeft(6, '0');
     return '$prefix-$now-$randomPart';
-  }
-
-  static String? _normalizeOptionalLocationName(String? value) {
-    final normalized = value?.trim().replaceAll(RegExp(r'\s+'), ' ');
-    if (normalized == null || normalized.isEmpty) {
-      return null;
-    }
-    return normalized;
   }
 
   void _updateAndPersist(
@@ -1284,31 +1192,6 @@ class CheckingController extends ChangeNotifier {
     notifyListeners();
   }
 
-  bool _canEnableAutomation(String message) {
-    if (!_state.hasValidChave) {
-      _setStatus(message, StatusTone.warning);
-      return false;
-    }
-    if (!_state.hasApiConfig) {
-      _setStatus(message, StatusTone.warning);
-      return false;
-    }
-    return true;
-  }
-
-  bool _canEnableLocationAutomation() {
-    if (!_state.locationSharingEnabled) {
-      _setStatus(
-        'Ative o compartilhamento de localização antes de habilitar a automação.',
-        StatusTone.warning,
-      );
-      return false;
-    }
-    return _canEnableAutomation(
-      'Preencha Chave, API HTTPS e chave compartilhada antes de ativar a automação por localização.',
-    );
-  }
-
   Future<void> _syncNativeAutomation() async {
     try {
       await _androidBridge.clearSchedules();
@@ -1320,7 +1203,12 @@ class CheckingController extends ChangeNotifier {
   @override
   void dispose() {
     _stopHistoryAutoRefresh();
-    _stopLocationUpdateIntervalScheduleTimer();
+    _stopLocationUpdateIntervalBoundaryTimer();
+    if (CheckingBackgroundLocationService.isSupported) {
+      CheckingBackgroundLocationService.removeListener(
+        _backgroundLocationListener,
+      );
+    }
     unawaited(_stopLocationTracking());
     super.dispose();
   }
