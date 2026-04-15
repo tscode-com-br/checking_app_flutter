@@ -1,9 +1,15 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:checking/src/core/theme/app_theme.dart';
 import 'package:checking/src/features/checking/controller/checking_controller.dart';
 import 'package:checking/src/features/checking/models/checking_state.dart';
 import 'package:checking/src/features/checking/models/managed_location.dart';
 import 'package:checking/src/features/checking/models/mobile_state.dart';
+import 'package:checking/src/features/checking/services/checking_android_bridge.dart';
+import 'package:checking/src/features/checking/services/checking_background_service.dart';
 import 'package:checking/src/features/checking/services/checking_services.dart';
+import 'package:checking/src/features/checking/services/location_catalog_service.dart';
 import 'package:checking/src/features/checking/view/checking_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -40,6 +46,46 @@ void main() {
     final restored = CheckingState.fromJson({'chave': 'HR70'});
 
     expect(restored.chave, 'HR70');
+  });
+
+  test('restores separated location search and automatic check flags', () {
+    final restored = CheckingState.fromJson({
+      'chave': 'AB12',
+      'locationSharingEnabled': true,
+      'autoCheckInEnabled': false,
+      'autoCheckOutEnabled': false,
+    });
+
+    expect(restored.locationSharingEnabled, isTrue);
+    expect(restored.autoCheckInEnabled, isFalse);
+    expect(restored.autoCheckOutEnabled, isFalse);
+    expect(restored.automaticCheckInOutEnabled, isFalse);
+  });
+
+  test('keeps legacy automation behavior when split flags are absent', () {
+    final restored = CheckingState.fromJson({
+      'chave': 'AB12',
+      'locationSharingEnabled': true,
+    });
+
+    expect(restored.locationSharingEnabled, isTrue);
+    expect(restored.autoCheckInEnabled, isTrue);
+    expect(restored.autoCheckOutEnabled, isTrue);
+    expect(restored.automaticCheckInOutEnabled, isTrue);
+  });
+
+  test('forces automatic check flags off when location search is off', () {
+    final restored = CheckingState.fromJson({
+      'chave': 'AB12',
+      'locationSharingEnabled': false,
+      'autoCheckInEnabled': true,
+      'autoCheckOutEnabled': true,
+    });
+
+    expect(restored.locationSharingEnabled, isFalse);
+    expect(restored.autoCheckInEnabled, isFalse);
+    expect(restored.autoCheckOutEnabled, isFalse);
+    expect(restored.automaticCheckInOutEnabled, isFalse);
   });
 
   test('does not persist last check-in and last check-out timestamps', () {
@@ -87,6 +133,26 @@ void main() {
 
     expect(fromCheckIn.lastRecordedAction, RegistroType.checkIn);
     expect(fromCheckOut.lastRecordedAction, RegistroType.checkOut);
+  });
+
+  test('background snapshot history only applies when timestamps exist', () {
+    expect(
+      CheckingController.shouldApplyHistoryFromSnapshot(
+        hasHydratedHistoryForCurrentKey: true,
+        snapshotLastCheckIn: null,
+        snapshotLastCheckOut: null,
+      ),
+      isFalse,
+    );
+
+    expect(
+      CheckingController.shouldApplyHistoryFromSnapshot(
+        hasHydratedHistoryForCurrentKey: true,
+        snapshotLastCheckIn: DateTime(2026, 4, 15, 6),
+        snapshotLastCheckOut: null,
+      ),
+      isTrue,
+    );
   });
 
   test('identifies checkout zone locations by configured names', () {
@@ -174,6 +240,55 @@ void main() {
     expect(distanceNearSecondCoordinate, lessThan(1));
   });
 
+  test(
+    'resolves the last detected managed location for immediate automation',
+    () {
+      final checkoutLocation = ManagedLocation(
+        id: 7,
+        local: 'Zona de CheckOut 3',
+        latitude: 1,
+        longitude: 1,
+        toleranceMeters: 200,
+        updatedAt: DateTime(2026, 4, 15),
+      );
+      final regularLocation = ManagedLocation(
+        id: 8,
+        local: 'Base P80',
+        latitude: 1,
+        longitude: 1,
+        toleranceMeters: 200,
+        updatedAt: DateTime(2026, 4, 15),
+      );
+
+      final resolved = CheckingController.resolveManagedLocationForLastCapture(
+        managedLocations: <ManagedLocation>[regularLocation, checkoutLocation],
+        lastMatchedLocation: ManagedLocation.checkoutZoneLabel,
+        lastDetectedLocation: 'Zona de CheckOut 3',
+      );
+
+      expect(resolved, same(checkoutLocation));
+    },
+  );
+
+  test('falls back to the last matched area when needed', () {
+    final regularLocation = ManagedLocation(
+      id: 9,
+      local: 'Base P82',
+      latitude: 1,
+      longitude: 1,
+      toleranceMeters: 200,
+      updatedAt: DateTime(2026, 4, 15),
+    );
+
+    final resolved = CheckingController.resolveManagedLocationForLastCapture(
+      managedLocations: <ManagedLocation>[regularLocation],
+      lastMatchedLocation: 'Base P82',
+      lastDetectedLocation: null,
+    );
+
+    expect(resolved, same(regularLocation));
+  });
+
   test('parses location catalog settings from api response', () {
     final response = LocationCatalogResponse.fromJson({
       'items': const [],
@@ -185,20 +300,118 @@ void main() {
     expect(response.items, isEmpty);
   });
 
-  test('uses 16-minute location updates during the daytime window', () {
+  test('uses 15-minute location updates during the daytime window', () {
     expect(
       CheckingController.resolveLocationUpdateIntervalSeconds(
         referenceTime: DateTime.utc(2025, 1, 6, 0, 30),
       ),
-      16 * 60,
+      15 * 60,
     );
     expect(
       CheckingController.describeLocationUpdateInterval(
         referenceTime: DateTime.utc(2025, 1, 6, 0, 30),
       ),
-      '16 min',
+      '15 min',
     );
   });
+
+  test('stops background tracking when the app task is closed', () {
+    expect(CheckingBackgroundLocationService.stopServiceOnTaskRemoval, isTrue);
+    expect(CheckingBackgroundLocationService.allowAutomaticRestart, isFalse);
+
+    final manifest = File(
+      'android/app/src/main/AndroidManifest.xml',
+    ).readAsStringSync();
+    expect(manifest, contains('android:stopWithTask="true"'));
+  });
+
+  test('shows separated labels for location search and automatic checks', () {
+    final screenSource = File(
+      'lib/src/features/checking/view/checking_screen.dart',
+    ).readAsStringSync();
+
+    expect(screenSource, contains("label: 'Busca por Localização:'"));
+    expect(screenSource, contains("label: 'Check-in/Check-out Automáticos:'"));
+  });
+
+  test(
+    'initializes persisted history before refreshing the location catalog',
+    () async {
+      final storageService = _FakeCheckingStorageService(
+        initialState: CheckingState.initial().copyWith(
+          chave: 'AB12',
+          apiBaseUrl: 'https://example.com',
+          apiSharedKey: 'shared-key',
+        ),
+      );
+      final apiService = _RecordingCheckingApiService();
+      final locationCatalogService = _RecordingLocationCatalogService();
+      final controller = CheckingController(
+        storageService: storageService,
+        apiService: apiService,
+        androidBridge: _FakeCheckingAndroidBridge(),
+        locationCatalogService: locationCatalogService,
+      );
+
+      await controller.initialize();
+      await controller.waitForPendingStatePersistence();
+
+      expect(apiService.calls, <String>['fetchState', 'fetchLocations']);
+      expect(locationCatalogService.replaceCalls, 1);
+      expect(controller.state.lastCheckIn, isNotNull);
+      expect(controller.state.lastCheckOut, isNotNull);
+
+      controller.dispose();
+    },
+  );
+
+  test(
+    'keeps last check-in and check-out blank until the initial api sync completes',
+    () async {
+      final storageService = _FakeCheckingStorageService(
+        initialState: CheckingState.initial().copyWith(
+          chave: 'AB12',
+          apiBaseUrl: 'https://example.com',
+          apiSharedKey: 'shared-key',
+          lastCheckIn: DateTime(2026, 4, 15, 6),
+          lastCheckOut: DateTime(2026, 4, 15, 8),
+        ),
+      );
+      final apiService = _DelayedRecordingCheckingApiService();
+      final controller = CheckingController(
+        storageService: storageService,
+        apiService: apiService,
+        androidBridge: _FakeCheckingAndroidBridge(),
+        locationCatalogService: _RecordingLocationCatalogService(),
+      );
+
+      final initializeFuture = controller.initialize();
+      await apiService.fetchStateStarted.future;
+
+      expect(controller.state.lastCheckIn, isNull);
+      expect(controller.state.lastCheckOut, isNull);
+
+      apiService.completeFetchState(
+        MobileStateResponse(
+          found: true,
+          chave: 'AB12',
+          nome: 'Usuário Teste',
+          projeto: 'P80',
+          currentAction: 'checkout',
+          currentEventTime: DateTime(2026, 4, 15, 8),
+          lastCheckInAt: DateTime(2026, 4, 15, 6),
+          lastCheckOutAt: DateTime(2026, 4, 15, 8),
+        ),
+      );
+
+      await initializeFuture;
+
+      expect(controller.state.lastCheckIn, isNotNull);
+      expect(controller.state.lastCheckOut, isNotNull);
+
+      controller.dispose();
+    },
+  );
 
   test('uses hourly location updates during the overnight window', () {
     expect(
@@ -260,6 +473,110 @@ void main() {
         source: 'location-automation',
       ),
       InformeType.normal,
+    );
+  });
+
+  test(
+    'manual submit does not refresh location tracking when automation is off',
+    () {
+      final state = CheckingState.initial().copyWith(
+        locationSharingEnabled: true,
+        autoCheckInEnabled: false,
+        autoCheckOutEnabled: false,
+      );
+
+      expect(
+        CheckingController.shouldRefreshLocationTrackingAfterSubmit(
+          state: state,
+        ),
+        isFalse,
+      );
+    },
+  );
+
+  test('manual submit refreshes location tracking when automation is on', () {
+    final state = CheckingState.initial().copyWith(
+      locationSharingEnabled: true,
+      autoCheckInEnabled: true,
+      autoCheckOutEnabled: true,
+    );
+
+    expect(
+      CheckingController.shouldRefreshLocationTrackingAfterSubmit(state: state),
+      isTrue,
+    );
+  });
+
+  test(
+    'background snapshot cannot re-enable a toggle that the user turned off',
+    () {
+      expect(
+        CheckingController.resolveControlFlagAfterSnapshot(
+          currentValue: false,
+          snapshotLocationSharingEnabled: true,
+        ),
+        isFalse,
+      );
+
+      expect(
+        CheckingController.resolveControlFlagAfterSnapshot(
+          currentValue: true,
+          snapshotLocationSharingEnabled: false,
+        ),
+        isFalse,
+      );
+    },
+  );
+
+  test('automatic toggle is disabled and off when location search is off', () {
+    final state = CheckingState.initial().copyWith(
+      locationSharingEnabled: false,
+      autoCheckInEnabled: true,
+      autoCheckOutEnabled: true,
+    );
+
+    expect(
+      CheckingController.isAutomaticCheckingEnabledInUi(state: state),
+      isFalse,
+    );
+    expect(
+      CheckingController.isAutomaticCheckingToggleInteractive(state: state),
+      isFalse,
+    );
+  });
+
+  test('automatic toggle is interactive when location search is on', () {
+    final state = CheckingState.initial().copyWith(
+      locationSharingEnabled: true,
+      autoCheckInEnabled: false,
+      autoCheckOutEnabled: false,
+    );
+
+    expect(
+      CheckingController.isAutomaticCheckingEnabledInUi(state: state),
+      isFalse,
+    );
+    expect(
+      CheckingController.isAutomaticCheckingToggleInteractive(state: state),
+      isTrue,
+    );
+  });
+
+  test('automatic toggle is locked while automatic transition is running', () {
+    final state = CheckingState.initial().copyWith(
+      locationSharingEnabled: true,
+      autoCheckInEnabled: true,
+      autoCheckOutEnabled: true,
+      isAutomaticCheckingUpdating: true,
+    );
+
+    expect(
+      CheckingController.isAutomaticCheckingEnabledInUi(state: state),
+      isTrue,
+    );
+    expect(
+      CheckingController.isAutomaticCheckingToggleInteractive(state: state),
+      isFalse,
     );
   });
 
@@ -528,6 +845,39 @@ void main() {
     },
   );
 
+  test(
+    'regular locations do not trigger automatic events when automation is off',
+    () {
+      final regularLocation = ManagedLocation(
+        id: 10,
+        local: 'Base P80',
+        latitude: 1,
+        longitude: 1,
+        toleranceMeters: 200,
+        updatedAt: DateTime(2026, 4, 15),
+      );
+
+      final action = CheckingController.resolveAutomaticActionForLocation(
+        remoteState: MobileStateResponse(
+          found: true,
+          chave: 'ZZ99',
+          nome: 'Teste',
+          projeto: 'P80',
+          currentAction: 'checkout',
+          currentEventTime: DateTime(2026, 4, 15, 18),
+          lastCheckInAt: DateTime(2026, 4, 15, 8),
+          lastCheckOutAt: DateTime(2026, 4, 15, 18),
+        ),
+        location: regularLocation,
+        autoCheckInEnabled: false,
+        autoCheckOutEnabled: false,
+        lastCheckInLocation: null,
+      );
+
+      expect(action, isNull);
+    },
+  );
+
   test('out-of-range checkout only happens beyond 2 km after a check-in', () {
     final farFromAllLocations =
         CheckingController.resolveAutomaticActionOutOfRange(
@@ -579,6 +929,28 @@ void main() {
     expect(stillNearLocations, isNull);
     expect(alreadyCheckedOut, isNull);
   });
+
+  test(
+    'out-of-range checkout does not happen when automatic checkout is off',
+    () {
+      final action = CheckingController.resolveAutomaticActionOutOfRange(
+        remoteState: MobileStateResponse(
+          found: true,
+          chave: 'EF56',
+          nome: 'Teste',
+          projeto: 'P83',
+          currentAction: 'checkin',
+          currentEventTime: DateTime(2026, 4, 10, 8),
+          lastCheckInAt: DateTime(2026, 4, 10, 8),
+          lastCheckOutAt: DateTime(2026, 4, 9, 18),
+        ),
+        nearestDistanceMeters: 2100,
+        autoCheckOutEnabled: false,
+      );
+
+      expect(action, isNull);
+    },
+  );
 }
 
 class _DelayedFakeCheckingStorageService extends CheckingStorageService {
@@ -597,5 +969,107 @@ class _DelayedFakeCheckingStorageService extends CheckingStorageService {
       await Future<void>.delayed(const Duration(milliseconds: 25));
     }
     savedStates.add(state);
+  }
+}
+
+class _FakeCheckingStorageService extends CheckingStorageService {
+  _FakeCheckingStorageService({required this.initialState});
+
+  final CheckingState initialState;
+  final List<CheckingState> savedStates = <CheckingState>[];
+
+  @override
+  Future<CheckingState> loadState() async {
+    return initialState;
+  }
+
+  @override
+  Future<void> saveState(CheckingState state) async {
+    savedStates.add(state);
+  }
+}
+
+class _RecordingCheckingApiService extends CheckingApiService {
+  final List<String> calls = <String>[];
+
+  @override
+  Future<MobileStateResponse> fetchState({
+    required String baseUrl,
+    required String sharedKey,
+    required String chave,
+  }) async {
+    calls.add('fetchState');
+    return MobileStateResponse(
+      found: true,
+      chave: chave,
+      nome: 'Usuário Teste',
+      projeto: 'P80',
+      currentAction: 'checkout',
+      currentEventTime: DateTime(2026, 4, 15, 8),
+      lastCheckInAt: DateTime(2026, 4, 15, 6),
+      lastCheckOutAt: DateTime(2026, 4, 15, 8),
+    );
+  }
+
+  @override
+  Future<LocationCatalogResponse> fetchLocations({
+    required String baseUrl,
+    required String sharedKey,
+  }) async {
+    calls.add('fetchLocations');
+    return LocationCatalogResponse(
+      items: const <ManagedLocation>[],
+      syncedAt: DateTime(2026, 4, 15, 8),
+      locationAccuracyThresholdMeters: 30,
+    );
+  }
+}
+
+class _DelayedRecordingCheckingApiService extends _RecordingCheckingApiService {
+  final Completer<void> fetchStateStarted = Completer<void>();
+  final Completer<MobileStateResponse> _fetchStateResponse =
+      Completer<MobileStateResponse>();
+
+  @override
+  Future<MobileStateResponse> fetchState({
+    required String baseUrl,
+    required String sharedKey,
+    required String chave,
+  }) async {
+    calls.add('fetchState');
+    if (!fetchStateStarted.isCompleted) {
+      fetchStateStarted.complete();
+    }
+    return _fetchStateResponse.future;
+  }
+
+  void completeFetchState(MobileStateResponse response) {
+    if (!_fetchStateResponse.isCompleted) {
+      _fetchStateResponse.complete(response);
+    }
+  }
+}
+
+class _FakeCheckingAndroidBridge extends CheckingAndroidBridge {
+  @override
+  Future<void> initialize({
+    required Future<void> Function(String action) onNativeAction,
+  }) async {}
+
+  @override
+  Future<void> clearSchedules() async {}
+}
+
+class _RecordingLocationCatalogService extends LocationCatalogService {
+  int replaceCalls = 0;
+
+  @override
+  Future<List<ManagedLocation>> loadLocations() async {
+    return const <ManagedLocation>[];
+  }
+
+  @override
+  Future<void> replaceLocations(List<ManagedLocation> items) async {
+    replaceCalls += 1;
   }
 }

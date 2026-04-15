@@ -20,7 +20,7 @@
             android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
             android:exported="false"
             android:foregroundServiceType="location"
-            android:stopWithTask="false" />
+            android:stopWithTask="true" />
 
         <receiver
             android:name=".NotificationActionReceiver"

@@ -203,6 +203,9 @@ class _CheckingScreenState extends State<CheckingScreen>
                 onLocationSharingChanged: (value) {
                   unawaited(_controller.setLocationSharingEnabled(value));
                 },
+                onAutomaticCheckingChanged: (value) {
+                  unawaited(_controller.setAutomaticCheckInOutEnabled(value));
+                },
               ),
             );
           },
@@ -449,11 +452,13 @@ class _LocationAutomationSheet extends StatelessWidget {
     required this.state,
     required this.onClose,
     required this.onLocationSharingChanged,
+    required this.onAutomaticCheckingChanged,
   });
 
   final CheckingState state;
   final VoidCallback onClose;
   final ValueChanged<bool>? onLocationSharingChanged;
+  final ValueChanged<bool>? onAutomaticCheckingChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -496,11 +501,27 @@ class _LocationAutomationSheet extends StatelessWidget {
               ),
               const SizedBox(height: 18),
               _SwitchRow(
-                label: 'Check-in/Check-out Automáticos',
+                label: 'Busca por Localização:',
                 value: state.locationSharingEnabled,
-                onChanged: state.isLocationUpdating
+                onChanged:
+                    state.isLocationUpdating ||
+                        state.isAutomaticCheckingUpdating
                     ? null
                     : onLocationSharingChanged,
+              ),
+              const SizedBox(height: 12),
+              _SwitchRow(
+                label: 'Check-in/Check-out Automáticos:',
+                value: CheckingController.isAutomaticCheckingEnabledInUi(
+                  state: state,
+                ),
+                isBusy: state.isAutomaticCheckingUpdating,
+                onChanged:
+                    CheckingController.isAutomaticCheckingToggleInteractive(
+                      state: state,
+                    )
+                    ? onAutomaticCheckingChanged
+                    : null,
               ),
               const SizedBox(height: 16),
               Row(
@@ -611,7 +632,7 @@ class _CapturedLocationCard extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           Text(
-            hasLocation ? locationName! : 'Nenhum local capturado',
+            hasLocation ? locationName! : 'Fora dos Locais Cadastrados',
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 15,
@@ -887,11 +908,13 @@ class _SwitchRow extends StatelessWidget {
     required this.label,
     required this.value,
     required this.onChanged,
+    this.isBusy = false,
   });
 
   final String label;
   final bool value;
   final ValueChanged<bool>? onChanged;
+  final bool isBusy;
 
   @override
   Widget build(BuildContext context) {
@@ -903,10 +926,27 @@ class _SwitchRow extends StatelessWidget {
             style: const TextStyle(fontSize: 14, color: AppTheme.textMain),
           ),
         ),
-        Switch(
-          value: value,
-          onChanged: onChanged,
-          activeThumbColor: AppTheme.primary,
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 180),
+          child: isBusy
+              ? const SizedBox(
+                  key: ValueKey('switch-loading'),
+                  width: 30,
+                  height: 30,
+                  child: Padding(
+                    padding: EdgeInsets.all(4),
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.4,
+                      color: AppTheme.primary,
+                    ),
+                  ),
+                )
+              : Switch(
+                  key: ValueKey<bool>(value),
+                  value: value,
+                  onChanged: onChanged,
+                  activeThumbColor: AppTheme.primary,
+                ),
         ),
       ],
     );

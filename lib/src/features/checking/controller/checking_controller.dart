@@ -48,6 +48,7 @@ class CheckingController extends ChangeNotifier {
   List<ManagedLocation> _managedLocations = const [];
   bool _processingLocationUpdate = false;
   Future<void> _pendingStateSave = Future.value();
+  bool _hasHydratedHistoryForCurrentKey = false;
   late final CheckingBackgroundLocationListener _backgroundLocationListener =
       _handleBackgroundLocationSnapshot;
 
@@ -66,13 +67,11 @@ class CheckingController extends ChangeNotifier {
     try {
       _state = _resolveLocationUpdateIntervalState(
         await _storageService.loadState(),
-      );
+      ).copyWith(lastCheckIn: null, lastCheckOut: null);
+      _hasHydratedHistoryForCurrentKey = false;
       _managedLocations = await _locationCatalogService.loadLocations();
       _restartLocationUpdateIntervalBoundaryTimer();
       notifyListeners();
-      if (_state.hasApiConfig) {
-        await refreshLocationsCatalog(silent: true, updateStatus: false);
-      }
       await _androidBridge.initialize(onNativeAction: _handleNativeAction);
       await _syncNativeAutomation();
       if (_state.hasApiConfig && _state.hasValidChave) {
@@ -81,6 +80,9 @@ class CheckingController extends ChangeNotifier {
       } else {
         _stopHistoryAutoRefresh();
         _clearHistoryFields(updateStatus: true);
+      }
+      if (_state.hasApiConfig) {
+        await refreshLocationsCatalog(silent: true, updateStatus: false);
       }
       if (_state.locationSharingEnabled) {
         await _restoreLocationSharing();
@@ -101,6 +103,8 @@ class CheckingController extends ChangeNotifier {
     if (normalized == _state.chave) {
       return;
     }
+
+    _hasHydratedHistoryForCurrentKey = false;
 
     final nextState = _state.copyWith(
       chave: normalized,
@@ -158,7 +162,7 @@ class CheckingController extends ChangeNotifier {
   }
 
   Future<void> setLocationSharingEnabled(bool value) async {
-    if (_state.isLocationUpdating) {
+    if (_state.isLocationUpdating || _state.isAutomaticCheckingUpdating) {
       return;
     }
 
@@ -174,10 +178,7 @@ class CheckingController extends ChangeNotifier {
         syncAutomation: false,
       );
       await flushStatePersistence();
-      _setStatus(
-        'Check-in/Check-out automáticos desativados.',
-        StatusTone.warning,
-      );
+      _setStatus('Busca por localização desativada.', StatusTone.warning);
       return;
     }
 
@@ -230,19 +231,20 @@ class CheckingController extends ChangeNotifier {
       _setState(
         _state.copyWith(
           locationSharingEnabled: true,
-          autoCheckInEnabled: true,
-          autoCheckOutEnabled: true,
           isLocationUpdating: false,
         ),
       );
       await flushStatePersistence();
-      await _startLocationTracking();
+      await _refreshLocationTrackingNow();
       final oemSetupResult = await _androidBridge.requestOemBackgroundSetup();
+      final automaticCheckEnabled = _state.automaticCheckInOutEnabled;
       final statusSegments = <String>[
         if (backgroundStartResult.warningMessage.isNotEmpty)
           backgroundStartResult.warningMessage
         else
-          'Check-in/Check-out automáticos ativados com monitoramento em segundo plano.',
+          automaticCheckEnabled
+              ? 'Busca por localização ativada com check-in/check-out automáticos habilitados.'
+              : 'Busca por localização ativada. O aplicativo atualizará a localização automaticamente, sem executar check-in/check-out automático.',
         if (oemSetupResult.message.isNotEmpty) oemSetupResult.message,
       ];
       final hasWarning =
@@ -257,23 +259,95 @@ class CheckingController extends ChangeNotifier {
         _state.copyWith(
           isLocationUpdating: false,
           locationSharingEnabled: false,
-          autoCheckInEnabled: false,
-          autoCheckOutEnabled: false,
         ),
       );
-      _setStatus(
-        'Falha ao ativar o check-in/check-out automáticos.',
-        StatusTone.error,
+      _setStatus('Falha ao ativar a busca por localização.', StatusTone.error);
+    }
+  }
+
+  Future<void> setAutomaticCheckInOutEnabled(bool value) async {
+    if (_state.isAutomaticCheckingUpdating || _state.isLocationUpdating) {
+      return;
+    }
+
+    if (_state.automaticCheckInOutEnabled == value) {
+      return;
+    }
+
+    if (!_state.locationSharingEnabled) {
+      _updateAndPersist(
+        _state.copyWith(autoCheckInEnabled: false, autoCheckOutEnabled: false),
+        syncAutomation: false,
       );
+      await flushStatePersistence();
+      _setStatus(
+        'Ative a busca por localização para habilitar o check-in/check-out automático.',
+        StatusTone.warning,
+      );
+      return;
+    }
+
+    _setState(_state.copyWith(isAutomaticCheckingUpdating: true));
+    try {
+      final nextState = _state.copyWith(
+        autoCheckInEnabled: value,
+        autoCheckOutEnabled: value,
+        isAutomaticCheckingUpdating: true,
+      );
+      _updateAndPersist(nextState, syncAutomation: false);
+      await flushStatePersistence();
+
+      var appliedImmediateAutomation = false;
+      if (value) {
+        if (_managedLocations.isEmpty && _state.hasApiConfig) {
+          await refreshLocationsCatalog(silent: true, updateStatus: false);
+        }
+        appliedImmediateAutomation =
+            await _applyAutomationFromLastKnownLocationIfNeeded();
+        if (!appliedImmediateAutomation) {
+          final previousLastCheckIn = _state.lastCheckIn;
+          final previousLastCheckOut = _state.lastCheckOut;
+          await _captureCurrentPositionNow();
+          appliedImmediateAutomation =
+              previousLastCheckIn != _state.lastCheckIn ||
+              previousLastCheckOut != _state.lastCheckOut;
+        }
+        if (CheckingBackgroundLocationService.isSupported) {
+          await _refreshBackgroundLocationService();
+        }
+      } else if (CheckingBackgroundLocationService.isSupported) {
+        await _refreshBackgroundLocationService();
+      }
+
+      if (value) {
+        if (!appliedImmediateAutomation) {
+          _setStatus(
+            _state.locationSharingEnabled
+                ? 'Check-in/Check-out automáticos ativados.'
+                : 'Check-in/Check-out automáticos ativados. Ative a busca por localização para iniciar o monitoramento.',
+            StatusTone.success,
+          );
+        }
+        return;
+      }
+
+      _setStatus(
+        _state.locationSharingEnabled
+            ? 'Check-in/Check-out automáticos desativados. A busca por localização continuará ativa.'
+            : 'Check-in/Check-out automáticos desativados.',
+        StatusTone.warning,
+      );
+    } finally {
+      _setState(_state.copyWith(isAutomaticCheckingUpdating: false));
     }
   }
 
   Future<void> setAutoCheckInEnabled(bool value) async {
-    await setLocationSharingEnabled(value);
+    await setAutomaticCheckInOutEnabled(value);
   }
 
   Future<void> setAutoCheckOutEnabled(bool value) async {
-    await setLocationSharingEnabled(value);
+    await setAutomaticCheckInOutEnabled(value);
   }
 
   Future<String> syncHistory({
@@ -305,6 +379,7 @@ class CheckingController extends ChangeNotifier {
         sharedKey: _state.apiSharedKey,
         chave: _state.chave,
       );
+      _hasHydratedHistoryForCurrentKey = true;
       _applyRemoteState(
         response,
         statusMessage: updateStatus
@@ -463,7 +538,9 @@ class CheckingController extends ChangeNotifier {
         recentAction: registro,
         recentLocal: local,
       );
-      unawaited(_refreshBackgroundLocationService());
+      if (shouldRefreshLocationTrackingAfterSubmit(state: _state)) {
+        unawaited(_refreshBackgroundLocationService());
+      }
       return response.message;
     } catch (error) {
       final message = error is CheckingApiException
@@ -489,6 +566,35 @@ class CheckingController extends ChangeNotifier {
       return InformeType.normal;
     }
     return state.informeFor(registro);
+  }
+
+  @visibleForTesting
+  static bool shouldRefreshLocationTrackingAfterSubmit({
+    required CheckingState state,
+  }) {
+    return state.locationSharingEnabled && state.hasAnyLocationAutomation;
+  }
+
+  @visibleForTesting
+  static bool resolveControlFlagAfterSnapshot({
+    required bool currentValue,
+    required bool snapshotLocationSharingEnabled,
+  }) {
+    return snapshotLocationSharingEnabled ? currentValue : false;
+  }
+
+  @visibleForTesting
+  static bool isAutomaticCheckingEnabledInUi({required CheckingState state}) {
+    return state.locationSharingEnabled && state.automaticCheckInOutEnabled;
+  }
+
+  @visibleForTesting
+  static bool isAutomaticCheckingToggleInteractive({
+    required CheckingState state,
+  }) {
+    return state.locationSharingEnabled &&
+        !state.isLocationUpdating &&
+        !state.isAutomaticCheckingUpdating;
   }
 
   @visibleForTesting
@@ -578,7 +684,7 @@ class CheckingController extends ChangeNotifier {
     }
 
     try {
-      await _startLocationTracking();
+      await _refreshLocationTrackingNow();
     } catch (_) {
       _updateAndPersist(
         _state.copyWith(
@@ -597,7 +703,7 @@ class CheckingController extends ChangeNotifier {
 
   Future<void> _startLocationTracking() async {
     if (CheckingBackgroundLocationService.isSupported) {
-      await CheckingBackgroundLocationService.start();
+      await _refreshBackgroundLocationService();
       return;
     }
 
@@ -627,6 +733,40 @@ class CheckingController extends ChangeNotifier {
       await _handlePositionUpdate(initialPosition);
     } catch (_) {
       // A stream continua tentando as próximas leituras.
+    }
+  }
+
+  Future<void> _refreshLocationTrackingNow() async {
+    if (!_state.locationSharingEnabled) {
+      return;
+    }
+
+    await _captureCurrentPositionNow();
+
+    if (CheckingBackgroundLocationService.isSupported) {
+      await _refreshBackgroundLocationService();
+      return;
+    }
+
+    if (_positionSubscription == null) {
+      await _startLocationTracking();
+    }
+  }
+
+  Future<void> _captureCurrentPositionNow() async {
+    if (!_state.locationSharingEnabled) {
+      return;
+    }
+
+    try {
+      final currentPosition = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.best,
+        ),
+      );
+      await _handlePositionUpdate(currentPosition);
+    } catch (_) {
+      // O stream ou o serviço em segundo plano continuam tentando as próximas leituras.
     }
   }
 
@@ -741,6 +881,38 @@ class CheckingController extends ChangeNotifier {
     }
   }
 
+  Future<bool> _applyAutomationFromLastKnownLocationIfNeeded() async {
+    if (!_state.locationSharingEnabled ||
+        !_state.hasAnyLocationAutomation ||
+        !_state.hasValidChave ||
+        !_state.hasApiConfig ||
+        _state.isSubmitting) {
+      return false;
+    }
+
+    final location = resolveManagedLocationForLastCapture(
+      managedLocations: _managedLocations,
+      lastMatchedLocation: _state.lastMatchedLocation,
+      lastDetectedLocation: _state.lastDetectedLocation,
+    );
+    if (location == null) {
+      return false;
+    }
+
+    if (!shouldAttemptAutomaticLocationEvent(
+      location: location,
+      lastRecordedAction: _state.lastRecordedAction,
+      lastCheckInLocation: _state.lastCheckInLocation,
+      autoCheckInEnabled: _state.autoCheckInEnabled,
+      autoCheckOutEnabled: _state.autoCheckOutEnabled,
+    )) {
+      return false;
+    }
+
+    await _submitAutomaticLocationEvent(location);
+    return true;
+  }
+
   _LocationMatchResult _resolveLocationMatch(Position position) {
     final matchResult = CheckingLocationLogic.resolveLocationMatch(
       managedLocations: _managedLocations,
@@ -766,6 +938,43 @@ class CheckingController extends ChangeNotifier {
       latitude: latitude,
       longitude: longitude,
     );
+  }
+
+  @visibleForTesting
+  static ManagedLocation? resolveManagedLocationForLastCapture({
+    required List<ManagedLocation> managedLocations,
+    required String? lastMatchedLocation,
+    required String? lastDetectedLocation,
+  }) {
+    final normalizedDetectedLocation = _normalizeLocationLookup(
+      lastDetectedLocation,
+    );
+    if (normalizedDetectedLocation != null) {
+      for (final location in managedLocations) {
+        if (_normalizeLocationLookup(location.local) ==
+            normalizedDetectedLocation) {
+          return location;
+        }
+      }
+    }
+
+    final normalizedMatchedLocation = _normalizeLocationLookup(
+      lastMatchedLocation,
+    );
+    if (normalizedMatchedLocation == null) {
+      return null;
+    }
+
+    for (final location in managedLocations) {
+      if (_normalizeLocationLookup(location.automationAreaLabel) ==
+              normalizedMatchedLocation ||
+          _normalizeLocationLookup(location.local) ==
+              normalizedMatchedLocation) {
+        return location;
+      }
+    }
+
+    return null;
   }
 
   Future<void> _submitAutomaticLocationEvent(ManagedLocation location) async {
@@ -907,6 +1116,16 @@ class CheckingController extends ChangeNotifier {
   }
 
   @visibleForTesting
+  static bool shouldApplyHistoryFromSnapshot({
+    required bool hasHydratedHistoryForCurrentKey,
+    required DateTime? snapshotLastCheckIn,
+    required DateTime? snapshotLastCheckOut,
+  }) {
+    return hasHydratedHistoryForCurrentKey &&
+        (snapshotLastCheckIn != null || snapshotLastCheckOut != null);
+  }
+
+  @visibleForTesting
   static String resolveAutomaticEventLocal({
     required RegistroType action,
     ManagedLocation? location,
@@ -1015,6 +1234,7 @@ class CheckingController extends ChangeNotifier {
   }
 
   void _clearHistoryFields({required bool updateStatus}) {
+    _hasHydratedHistoryForCurrentKey = false;
     _updateAndPersist(
       _state.copyWith(
         lastMatchedLocation: null,
@@ -1110,23 +1330,48 @@ class CheckingController extends ChangeNotifier {
   void _handleBackgroundLocationSnapshot(
     CheckingBackgroundLocationSnapshot snapshot,
   ) {
+    if (snapshot.chave != _state.chave) {
+      return;
+    }
+
+    final nextLocationSharingEnabled = resolveControlFlagAfterSnapshot(
+      currentValue: _state.locationSharingEnabled,
+      snapshotLocationSharingEnabled: snapshot.locationSharingEnabled,
+    );
+    final shouldApplySnapshotHistory = shouldApplyHistoryFromSnapshot(
+      hasHydratedHistoryForCurrentKey: _hasHydratedHistoryForCurrentKey,
+      snapshotLastCheckIn: snapshot.lastCheckIn,
+      snapshotLastCheckOut: snapshot.lastCheckOut,
+    );
     final hasStatusUpdate = snapshot.statusMessage.isNotEmpty;
     _setState(
       _state.copyWith(
         registro: snapshot.registro,
         checkInProjeto: snapshot.checkInProjeto,
-        locationSharingEnabled: snapshot.locationSharingEnabled,
-        autoCheckInEnabled: snapshot.locationSharingEnabled,
-        autoCheckOutEnabled: snapshot.locationSharingEnabled,
+        locationSharingEnabled: nextLocationSharingEnabled,
+        autoCheckInEnabled: resolveControlFlagAfterSnapshot(
+          currentValue: _state.autoCheckInEnabled,
+          snapshotLocationSharingEnabled: snapshot.locationSharingEnabled,
+        ),
+        autoCheckOutEnabled: resolveControlFlagAfterSnapshot(
+          currentValue: _state.autoCheckOutEnabled,
+          snapshotLocationSharingEnabled: snapshot.locationSharingEnabled,
+        ),
         locationUpdateIntervalSeconds: snapshot.locationUpdateIntervalSeconds,
         locationAccuracyThresholdMeters:
             snapshot.locationAccuracyThresholdMeters,
         lastMatchedLocation: snapshot.lastMatchedLocation,
         lastDetectedLocation: snapshot.lastDetectedLocation,
         lastLocationUpdateAt: snapshot.lastLocationUpdateAt,
-        lastCheckInLocation: snapshot.lastCheckInLocation,
-        lastCheckIn: snapshot.lastCheckIn,
-        lastCheckOut: snapshot.lastCheckOut,
+        lastCheckInLocation: shouldApplySnapshotHistory
+            ? snapshot.lastCheckInLocation
+            : _state.lastCheckInLocation,
+        lastCheckIn: shouldApplySnapshotHistory
+            ? snapshot.lastCheckIn
+            : _state.lastCheckIn,
+        lastCheckOut: shouldApplySnapshotHistory
+            ? snapshot.lastCheckOut
+            : _state.lastCheckOut,
         statusMessage: hasStatusUpdate
             ? snapshot.statusMessage
             : _state.statusMessage,
@@ -1143,6 +1388,17 @@ class CheckingController extends ChangeNotifier {
         .toRadixString(16)
         .padLeft(6, '0');
     return '$prefix-$now-$randomPart';
+  }
+
+  static String? _normalizeLocationLookup(String? value) {
+    final normalized = value?.trim().toLowerCase().replaceAll(
+      RegExp(r'\s+'),
+      ' ',
+    );
+    if (normalized == null || normalized.isEmpty) {
+      return null;
+    }
+    return normalized;
   }
 
   void _updateAndPersist(

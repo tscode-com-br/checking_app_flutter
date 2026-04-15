@@ -59,6 +59,7 @@ class CheckingState {
     required this.isSubmitting,
     required this.isSyncing,
     required this.isLocationUpdating,
+    required this.isAutomaticCheckingUpdating,
   });
 
   factory CheckingState.initial() {
@@ -87,12 +88,25 @@ class CheckingState {
       isSubmitting: false,
       isSyncing: false,
       isLocationUpdating: false,
+      isAutomaticCheckingUpdating: false,
     );
   }
 
   factory CheckingState.fromJson(Map<String, dynamic> json) {
     final locationSharingEnabled =
         json['locationSharingEnabled'] as bool? ?? false;
+    final restoredAutoCheckInEnabled = json.containsKey('autoCheckInEnabled')
+        ? json['autoCheckInEnabled'] as bool? ?? false
+        : locationSharingEnabled;
+    final restoredAutoCheckOutEnabled = json.containsKey('autoCheckOutEnabled')
+        ? json['autoCheckOutEnabled'] as bool? ?? false
+        : locationSharingEnabled;
+    final autoCheckInEnabled = locationSharingEnabled
+        ? restoredAutoCheckInEnabled
+        : false;
+    final autoCheckOutEnabled = locationSharingEnabled
+        ? restoredAutoCheckOutEnabled
+        : false;
     final storedRegistro = RegistroType.values.firstWhere(
       (value) => value.name == json['registro'],
       orElse: () => RegistroType.checkIn,
@@ -138,8 +152,8 @@ class CheckingState {
       locationAccuracyThresholdMeters:
           (json['locationAccuracyThresholdMeters'] as num?)?.toInt() ?? 30,
       locationSharingEnabled: locationSharingEnabled,
-      autoCheckInEnabled: locationSharingEnabled,
-      autoCheckOutEnabled: locationSharingEnabled,
+      autoCheckInEnabled: autoCheckInEnabled,
+      autoCheckOutEnabled: autoCheckOutEnabled,
       lastMatchedLocation: _normalizeOptionalText(
         json['lastMatchedLocation'] as String?,
       ),
@@ -160,6 +174,7 @@ class CheckingState {
       isSubmitting: false,
       isSyncing: false,
       isLocationUpdating: false,
+      isAutomaticCheckingUpdating: false,
     );
   }
 
@@ -187,6 +202,7 @@ class CheckingState {
   final bool isSubmitting;
   final bool isSyncing;
   final bool isLocationUpdating;
+  final bool isAutomaticCheckingUpdating;
 
   InformeType get informe => informeFor(registro);
   ProjetoType get projeto => checkInProjeto;
@@ -194,6 +210,8 @@ class CheckingState {
   bool get hasValidChave => chave.trim().length == 4;
   bool get hasApiConfig =>
       apiBaseUrl.trim().isNotEmpty && apiSharedKey.trim().isNotEmpty;
+  bool get automaticCheckInOutEnabled =>
+      autoCheckInEnabled || autoCheckOutEnabled;
   bool get hasAnyLocationAutomation =>
       autoCheckInEnabled || autoCheckOutEnabled;
   RegistroType? get lastRecordedAction {
@@ -314,6 +332,7 @@ class CheckingState {
     bool? isSubmitting,
     bool? isSyncing,
     bool? isLocationUpdating,
+    bool? isAutomaticCheckingUpdating,
   }) {
     return CheckingState(
       chave: chave ?? this.chave,
@@ -356,6 +375,8 @@ class CheckingState {
       isSubmitting: isSubmitting ?? this.isSubmitting,
       isSyncing: isSyncing ?? this.isSyncing,
       isLocationUpdating: isLocationUpdating ?? this.isLocationUpdating,
+      isAutomaticCheckingUpdating:
+          isAutomaticCheckingUpdating ?? this.isAutomaticCheckingUpdating,
     );
   }
 }

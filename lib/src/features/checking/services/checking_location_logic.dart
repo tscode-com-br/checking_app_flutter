@@ -20,7 +20,7 @@ class CheckingLocationLogic {
   static const double defaultLocationAccuracyThresholdMeters = 30;
   static const String automaticCheckoutLocation = 'Fora do Local de Trabalho';
   static const Duration singaporeUtcOffset = Duration(hours: 8);
-  static const int daytimeLocationUpdateIntervalSeconds = 16 * 60;
+  static const int daytimeLocationUpdateIntervalSeconds = 15 * 60;
   static const int overnightLocationUpdateIntervalSeconds = 60 * 60;
   static const int daytimeLocationUpdateStartHour = 6;
   static const int overnightLocationUpdateStartHour = 22;
@@ -35,7 +35,7 @@ class CheckingLocationLogic {
   static String describeLocationUpdateInterval({DateTime? referenceTime}) {
     return resolveLocationUpdateIntervalSeconds(referenceTime: referenceTime) ==
             daytimeLocationUpdateIntervalSeconds
-        ? '16 min'
+        ? '15 min'
         : '1 hora';
   }
 

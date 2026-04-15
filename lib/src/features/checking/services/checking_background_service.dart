@@ -27,6 +27,7 @@ class CheckingBackgroundStartResult {
 
 class CheckingBackgroundLocationSnapshot {
   const CheckingBackgroundLocationSnapshot({
+    required this.chave,
     required this.registro,
     required this.checkInProjeto,
     required this.locationSharingEnabled,
@@ -54,6 +55,7 @@ class CheckingBackgroundLocationSnapshot {
         (map['statusTone'] as String? ?? StatusTone.neutral.name).trim();
 
     return CheckingBackgroundLocationSnapshot(
+      chave: CheckingState.sanitizeChave((map['chave'] as String? ?? '')),
       registro: RegistroType.values.firstWhere(
         (value) => value.name == registroName,
         orElse: () => RegistroType.checkIn,
@@ -85,6 +87,7 @@ class CheckingBackgroundLocationSnapshot {
     );
   }
 
+  final String chave;
   final RegistroType registro;
   final ProjetoType checkInProjeto;
   final bool locationSharingEnabled;
@@ -127,6 +130,8 @@ class CheckingBackgroundLocationService {
   static const String _notificationTitle = 'Checking ativo';
   static const String _notificationText =
       'Monitoramento de localização em segundo plano em execução.';
+  static const bool stopServiceOnTaskRemoval = true;
+  static const bool allowAutomaticRestart = false;
 
   static final Map<CheckingBackgroundLocationListener, DataCallback>
   _listeners = <CheckingBackgroundLocationListener, DataCallback>{};
@@ -164,8 +169,8 @@ class CheckingBackgroundLocationService {
           autoRunOnMyPackageReplaced: true,
           allowWakeLock: true,
           allowWifiLock: false,
-          allowAutoRestart: true,
-          stopWithTask: false,
+          allowAutoRestart: allowAutomaticRestart,
+          stopWithTask: stopServiceOnTaskRemoval,
         ),
       );
       _initialized = true;
@@ -249,7 +254,7 @@ class CheckingBackgroundLocationService {
           return const CheckingBackgroundStartResult(
             ready: true,
             warningMessage:
-                'Check-in/Check-out automáticos ativados. Para máxima confiabilidade com a tela bloqueada, permita ignorar a otimização de bateria do Android.',
+                'Busca por localização ativada. Para máxima confiabilidade com a tela bloqueada, permita ignorar a otimização de bateria do Android.',
           );
         }
       }
@@ -257,7 +262,7 @@ class CheckingBackgroundLocationService {
       return const CheckingBackgroundStartResult(
         ready: true,
         warningMessage:
-            'Check-in/Check-out automáticos ativados. Verifique a otimização de bateria do Android se o sistema interromper o monitoramento.',
+            'Busca por localização ativada. Verifique a otimização de bateria do Android se o sistema interromper o monitoramento.',
       );
     }
 
@@ -782,6 +787,7 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
   }) {
     FlutterForegroundTask.sendDataToMain(<String, Object?>{
       'kind': CheckingBackgroundLocationService._taskDataKind,
+      'chave': state.chave,
       'registro': state.registro.name,
       'checkInProjeto': state.checkInProjeto.name,
       'locationSharingEnabled': state.locationSharingEnabled,
