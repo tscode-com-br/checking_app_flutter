@@ -605,7 +605,7 @@ class _LocationAutomationSheet extends StatelessWidget {
 
 Future<void> _showRecentLocationHistoryDialog(
   BuildContext context, {
-  required List<DateTime> locationFetchHistory,
+  required List<LocationFetchEntry> locationFetchHistory,
 }) async {
   await showDialog<void>(
     context: context,
@@ -620,7 +620,7 @@ Future<void> _showRecentLocationHistoryDialog(
 class _RecentLocationHistoryDialog extends StatefulWidget {
   const _RecentLocationHistoryDialog({required this.locationFetchHistory});
 
-  final List<DateTime> locationFetchHistory;
+  final List<LocationFetchEntry> locationFetchHistory;
 
   @override
   State<_RecentLocationHistoryDialog> createState() =>
@@ -664,9 +664,9 @@ class _RecentLocationHistoryDialogState
             Text(
               'Últimas Localizações',
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 14),
             DecoratedBox(
@@ -679,12 +679,13 @@ class _RecentLocationHistoryDialogState
                     const _RecentLocationHistoryRow(
                       dateText: 'Data',
                       timeText: 'Hora',
+                      coordinateText: 'Coordenada',
                       isHeader: true,
                     ),
                     const SizedBox(height: 8),
                     ConstrainedBox(
                       constraints: BoxConstraints(
-                        maxHeight: visibleRowCount * 44,
+                        maxHeight: visibleRowCount * 58,
                       ),
                       child: Scrollbar(
                         controller: _scrollController,
@@ -702,13 +703,24 @@ class _RecentLocationHistoryDialogState
                               return const _RecentLocationHistoryRow(
                                 dateText: '--',
                                 timeText: '--',
+                                coordinateText: '--\n--',
                               );
                             }
 
                             final locationFetch = locationFetchHistory[index];
+                            final coordinateText =
+                                locationFetch.latitude == null ||
+                                    locationFetch.longitude == null
+                                ? '--\n--'
+                                : '${_formatCoordinate(locationFetch.latitude!)}\n${_formatCoordinate(locationFetch.longitude!)}';
                             return _RecentLocationHistoryRow(
-                              dateText: dateFormatter.format(locationFetch),
-                              timeText: timeFormatter.format(locationFetch),
+                              dateText: dateFormatter.format(
+                                locationFetch.timestamp,
+                              ),
+                              timeText: timeFormatter.format(
+                                locationFetch.timestamp,
+                              ),
+                              coordinateText: coordinateText,
                             );
                           },
                           separatorBuilder: (context, index) => Divider(
@@ -741,11 +753,13 @@ class _RecentLocationHistoryRow extends StatelessWidget {
   const _RecentLocationHistoryRow({
     required this.dateText,
     required this.timeText,
+    required this.coordinateText,
     this.isHeader = false,
   });
 
   final String dateText;
   final String timeText;
+  final String coordinateText;
   final bool isHeader;
 
   @override
@@ -757,7 +771,7 @@ class _RecentLocationHistoryRow extends StatelessWidget {
     );
 
     return SizedBox(
-      height: 44,
+      height: isHeader ? 24 : 58,
       child: Row(
         children: [
           Expanded(
@@ -774,10 +788,24 @@ class _RecentLocationHistoryRow extends StatelessWidget {
               style: textStyle,
             ),
           ),
+          Expanded(
+            flex: 2,
+            child: Text(
+              coordinateText,
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              softWrap: true,
+              style: textStyle.copyWith(fontSize: isHeader ? 13 : 12),
+            ),
+          ),
         ],
       ),
     );
   }
+}
+
+String _formatCoordinate(double value) {
+  return value.toStringAsFixed(6);
 }
 
 class _DangerCloseButton extends StatelessWidget {

@@ -77,7 +77,9 @@ class CheckingBackgroundLocationSnapshot {
       lastLocationUpdateAt: _readNullableDateTime(
         map['lastLocationUpdateAt'] as num?,
       ),
-      locationFetchHistory: _readDateTimeList(map['locationFetchHistory']),
+      locationFetchHistory: _readLocationFetchHistory(
+        map['locationFetchHistory'],
+      ),
       lastCheckInLocation: _readNullableString(map['lastCheckInLocation']),
       lastCheckIn: _readNullableDateTime(map['lastCheckIn'] as num?),
       lastCheckOut: _readNullableDateTime(map['lastCheckOut'] as num?),
@@ -100,7 +102,7 @@ class CheckingBackgroundLocationSnapshot {
   final String? lastMatchedLocation;
   final String? lastDetectedLocation;
   final DateTime? lastLocationUpdateAt;
-  final List<DateTime> locationFetchHistory;
+  final List<LocationFetchEntry> locationFetchHistory;
   final String? lastCheckInLocation;
   final DateTime? lastCheckIn;
   final DateTime? lastCheckOut;
@@ -122,15 +124,15 @@ class CheckingBackgroundLocationSnapshot {
     return DateTime.fromMillisecondsSinceEpoch(value.toInt()).toLocal();
   }
 
-  static List<DateTime> _readDateTimeList(Object? value) {
+  static List<LocationFetchEntry> _readLocationFetchHistory(Object? value) {
     if (value is! List) {
-      return const <DateTime>[];
+      return const <LocationFetchEntry>[];
     }
 
-    return value
-        .whereType<num>()
-        .map((entry) => DateTime.fromMillisecondsSinceEpoch(entry.toInt()).toLocal())
-        .toList(growable: false);
+    return LocationFetchEntry.normalizeHistory(
+      value.map(LocationFetchEntry.tryParse).whereType<LocationFetchEntry>(),
+      maxEntries: LocationFetchEntry.maxStoredEntries,
+    );
   }
 }
 
@@ -581,6 +583,21 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
       return;
     }
 
+    final positionTimestamp = CheckingLocationLogic.resolvePositionTimestamp(
+      position,
+    );
+    if (CheckingLocationLogic.shouldSkipDuplicateLocationFetch(
+      history: baseState.locationFetchHistory,
+      timestamp: positionTimestamp,
+      latitude: position.latitude,
+      longitude: position.longitude,
+    )) {
+      if (shouldRestartTracking) {
+        await _restartTracking(baseState);
+      }
+      return;
+    }
+
     _processingLocationUpdate = true;
     try {
       final managedLocations = await _locationCatalogService.loadLocations();
@@ -590,13 +607,13 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
         longitude: position.longitude,
       );
       final matchedLocation = matchResult.matchedLocation;
-      final positionTimestamp = CheckingLocationLogic.resolvePositionTimestamp(
-        position,
-      );
-      final locationFetchHistory = CheckingLocationLogic.recordLocationFetchHistory(
-        history: baseState.locationFetchHistory,
-        timestamp: positionTimestamp,
-      );
+      final locationFetchHistory =
+          CheckingLocationLogic.recordLocationFetchHistory(
+            history: baseState.locationFetchHistory,
+            timestamp: positionTimestamp,
+            latitude: position.latitude,
+            longitude: position.longitude,
+          );
       final capturedLocationLabel =
           CheckingLocationLogic.resolveCapturedLocationLabel(
             location: matchedLocation,
@@ -864,8 +881,14 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
       'lastDetectedLocation': state.lastDetectedLocation,
       'lastLocationUpdateAt':
           state.lastLocationUpdateAt?.millisecondsSinceEpoch,
-        'locationFetchHistory': state.locationFetchHistory
-          .map((value) => value.millisecondsSinceEpoch)
+      'locationFetchHistory': state.locationFetchHistory
+          .map(
+            (value) => <String, Object?>{
+              'timestamp': value.timestamp.millisecondsSinceEpoch,
+              'latitude': value.latitude,
+              'longitude': value.longitude,
+            },
+          )
           .toList(growable: false),
       'lastCheckInLocation': state.lastCheckInLocation,
       'lastCheckIn': state.lastCheckIn?.millisecondsSinceEpoch,

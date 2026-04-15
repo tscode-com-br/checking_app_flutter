@@ -33,6 +33,116 @@ extension ProjetoTypeX on ProjetoType {
 
 const _unset = Object();
 
+class LocationFetchEntry {
+  static const int maxStoredEntries = 10;
+  static const Duration duplicateWindow = Duration(seconds: 1);
+  static const double duplicateCoordinateTolerance = 1e-6;
+
+  const LocationFetchEntry({
+    required this.timestamp,
+    this.latitude,
+    this.longitude,
+  });
+
+  final DateTime timestamp;
+  final double? latitude;
+  final double? longitude;
+
+  bool isDuplicateOf(
+    LocationFetchEntry other, {
+    Duration maxTimestampDifference = duplicateWindow,
+    double coordinateTolerance = duplicateCoordinateTolerance,
+  }) {
+    final timestampDifferenceMillis = timestamp
+        .difference(other.timestamp)
+        .inMilliseconds
+        .abs();
+    if (timestampDifferenceMillis > maxTimestampDifference.inMilliseconds) {
+      return false;
+    }
+
+    final currentLatitude = latitude;
+    final currentLongitude = longitude;
+    final otherLatitude = other.latitude;
+    final otherLongitude = other.longitude;
+    if (currentLatitude == null ||
+        currentLongitude == null ||
+        otherLatitude == null ||
+        otherLongitude == null) {
+      return currentLatitude == otherLatitude &&
+          currentLongitude == otherLongitude;
+    }
+
+    return (currentLatitude - otherLatitude).abs() <= coordinateTolerance &&
+        (currentLongitude - otherLongitude).abs() <= coordinateTolerance;
+  }
+
+  static List<LocationFetchEntry> normalizeHistory(
+    Iterable<LocationFetchEntry> entries, {
+    int? maxEntries,
+  }) {
+    final effectiveMaxEntries = maxEntries == null
+        ? null
+        : (maxEntries < 1 ? 1 : maxEntries);
+    final normalized = <LocationFetchEntry>[];
+
+    for (final entry in entries) {
+      if (normalized.isNotEmpty && entry.isDuplicateOf(normalized.last)) {
+        continue;
+      }
+
+      normalized.add(entry);
+      if (effectiveMaxEntries != null &&
+          normalized.length >= effectiveMaxEntries) {
+        break;
+      }
+    }
+
+    return List<LocationFetchEntry>.unmodifiable(normalized);
+  }
+
+  static LocationFetchEntry? tryParse(Object? value) {
+    if (value is String) {
+      final timestamp = DateTime.tryParse(value)?.toLocal();
+      if (timestamp == null) {
+        return null;
+      }
+      return LocationFetchEntry(timestamp: timestamp);
+    }
+
+    if (value is Map) {
+      final map = Map<Object?, Object?>.from(value);
+      final rawTimestamp = map['timestamp'];
+      final timestamp = switch (rawTimestamp) {
+        String _ => DateTime.tryParse(rawTimestamp)?.toLocal(),
+        num _ => DateTime.fromMillisecondsSinceEpoch(
+          rawTimestamp.toInt(),
+        ).toLocal(),
+        _ => null,
+      };
+      if (timestamp == null) {
+        return null;
+      }
+
+      return LocationFetchEntry(
+        timestamp: timestamp,
+        latitude: (map['latitude'] as num?)?.toDouble(),
+        longitude: (map['longitude'] as num?)?.toDouble(),
+      );
+    }
+
+    return null;
+  }
+
+  Map<String, Object?> toJson() {
+    return <String, Object?>{
+      'timestamp': timestamp.toUtc().toIso8601String(),
+      'latitude': latitude,
+      'longitude': longitude,
+    };
+  }
+}
+
 class CheckingState {
   const CheckingState({
     required this.chave,
@@ -82,7 +192,7 @@ class CheckingState {
       lastMatchedLocation: null,
       lastDetectedLocation: null,
       lastLocationUpdateAt: null,
-      locationFetchHistory: <DateTime>[],
+      locationFetchHistory: <LocationFetchEntry>[],
       lastCheckInLocation: null,
       lastCheckIn: null,
       lastCheckOut: null,
@@ -168,7 +278,7 @@ class CheckingState {
       lastLocationUpdateAt: _parseOptionalDateTime(
         json['lastLocationUpdateAt'] as String?,
       ),
-      locationFetchHistory: _parseOptionalDateTimeList(
+      locationFetchHistory: _parseLocationFetchHistory(
         json['locationFetchHistory'],
       ),
       lastCheckInLocation: _normalizeOptionalText(
@@ -202,7 +312,7 @@ class CheckingState {
   final String? lastMatchedLocation;
   final String? lastDetectedLocation;
   final DateTime? lastLocationUpdateAt;
-  final List<DateTime> locationFetchHistory;
+  final List<LocationFetchEntry> locationFetchHistory;
   final String? lastCheckInLocation;
   final DateTime? lastCheckIn;
   final DateTime? lastCheckOut;
@@ -295,16 +405,15 @@ class CheckingState {
     return DateTime.tryParse(value)?.toLocal();
   }
 
-  static List<DateTime> _parseOptionalDateTimeList(Object? value) {
+  static List<LocationFetchEntry> _parseLocationFetchHistory(Object? value) {
     if (value is! List) {
-      return const <DateTime>[];
+      return const <LocationFetchEntry>[];
     }
 
-    return value
-        .whereType<String>()
-        .map(_parseOptionalDateTime)
-        .whereType<DateTime>()
-        .toList(growable: false);
+    return LocationFetchEntry.normalizeHistory(
+      value.map(LocationFetchEntry.tryParse).whereType<LocationFetchEntry>(),
+      maxEntries: LocationFetchEntry.maxStoredEntries,
+    );
   }
 
   Map<String, dynamic> toJson() {
@@ -326,7 +435,7 @@ class CheckingState {
       'lastDetectedLocation': lastDetectedLocation,
       'lastLocationUpdateAt': lastLocationUpdateAt?.toUtc().toIso8601String(),
       'locationFetchHistory': locationFetchHistory
-          .map((value) => value.toUtc().toIso8601String())
+          .map((value) => value.toJson())
           .toList(growable: false),
       'lastCheckInLocation': lastCheckInLocation,
     };
@@ -389,9 +498,11 @@ class CheckingState {
       lastLocationUpdateAt: identical(lastLocationUpdateAt, _unset)
           ? this.lastLocationUpdateAt
           : lastLocationUpdateAt as DateTime?,
-        locationFetchHistory: identical(locationFetchHistory, _unset)
+      locationFetchHistory: identical(locationFetchHistory, _unset)
           ? this.locationFetchHistory
-          : List<DateTime>.unmodifiable(locationFetchHistory as List<DateTime>),
+          : List<LocationFetchEntry>.unmodifiable(
+              locationFetchHistory as List<LocationFetchEntry>,
+            ),
       lastCheckInLocation: identical(lastCheckInLocation, _unset)
           ? this.lastCheckInLocation
           : lastCheckInLocation as String?,

@@ -18,7 +18,8 @@ class CheckingLocationMatchResult {
 class CheckingLocationLogic {
   static const double outOfRangeCheckoutDistanceMeters = 2000;
   static const double defaultLocationAccuracyThresholdMeters = 30;
-  static const int maxLocationFetchHistoryEntries = 10;
+  static const int maxLocationFetchHistoryEntries =
+      LocationFetchEntry.maxStoredEntries;
   static const String automaticCheckoutLocation = 'Fora do Local de Trabalho';
   static const String outsideWorkplaceCapturedLocation =
       'Fora do Ambiente de Trabalho';
@@ -260,15 +261,39 @@ class CheckingLocationLogic {
     return location.local;
   }
 
-  static List<DateTime> recordLocationFetchHistory({
-    required List<DateTime> history,
+  static List<LocationFetchEntry> recordLocationFetchHistory({
+    required List<LocationFetchEntry> history,
     required DateTime timestamp,
+    required double latitude,
+    required double longitude,
     int maxEntries = maxLocationFetchHistoryEntries,
   }) {
     final effectiveMaxEntries = max(1, maxEntries);
-    return <DateTime>[timestamp.toLocal(), ...history]
-        .take(effectiveMaxEntries)
-        .toList(growable: false);
+    return LocationFetchEntry.normalizeHistory(<LocationFetchEntry>[
+      LocationFetchEntry(
+        timestamp: timestamp.toLocal(),
+        latitude: latitude,
+        longitude: longitude,
+      ),
+      ...history,
+    ], maxEntries: effectiveMaxEntries);
+  }
+
+  static bool shouldSkipDuplicateLocationFetch({
+    required List<LocationFetchEntry> history,
+    required DateTime timestamp,
+    required double latitude,
+    required double longitude,
+  }) {
+    if (history.isEmpty) {
+      return false;
+    }
+
+    return LocationFetchEntry(
+      timestamp: timestamp.toLocal(),
+      latitude: latitude,
+      longitude: longitude,
+    ).isDuplicateOf(history.first);
   }
 
   static bool isLocationAccuracyPreciseEnough(

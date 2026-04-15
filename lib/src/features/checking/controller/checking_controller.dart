@@ -1019,16 +1019,28 @@ class CheckingController extends ChangeNotifier {
       return;
     }
 
+    final positionTimestamp = _resolvePositionTimestamp(position);
+    if (CheckingLocationLogic.shouldSkipDuplicateLocationFetch(
+      history: _state.locationFetchHistory,
+      timestamp: positionTimestamp,
+      latitude: position.latitude,
+      longitude: position.longitude,
+    )) {
+      return;
+    }
+
     _processingLocationUpdate = true;
     try {
-      final positionTimestamp = _resolvePositionTimestamp(position);
       final matchResult = _resolveLocationMatch(position);
       final matchedLocation = matchResult.matchedLocation;
       final matchedAreaLabel = matchedLocation?.automationAreaLabel;
-      final locationFetchHistory = CheckingLocationLogic.recordLocationFetchHistory(
-        history: _state.locationFetchHistory,
-        timestamp: positionTimestamp,
-      );
+      final locationFetchHistory =
+          CheckingLocationLogic.recordLocationFetchHistory(
+            history: _state.locationFetchHistory,
+            timestamp: positionTimestamp,
+            latitude: position.latitude,
+            longitude: position.longitude,
+          );
       final capturedLocationLabel = resolveCapturedLocationLabel(
         location: matchedLocation,
         nearestWorkplaceDistanceMeters:
