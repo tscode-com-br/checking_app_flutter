@@ -88,6 +88,41 @@ void main() {
     expect(restored.automaticCheckInOutEnabled, isFalse);
   });
 
+  test(
+    'location sharing toggle stays disabled until Android setup is ready',
+    () {
+      final blockedState = CheckingState.initial().copyWith(
+        canEnableLocationSharing: false,
+        locationSharingEnabled: false,
+      );
+      final enabledState = blockedState.copyWith(
+        canEnableLocationSharing: true,
+      );
+      final alreadyEnabledState = blockedState.copyWith(
+        locationSharingEnabled: true,
+      );
+
+      expect(
+        CheckingController.isLocationSharingToggleInteractive(
+          state: blockedState,
+        ),
+        isFalse,
+      );
+      expect(
+        CheckingController.isLocationSharingToggleInteractive(
+          state: enabledState,
+        ),
+        isTrue,
+      );
+      expect(
+        CheckingController.isLocationSharingToggleInteractive(
+          state: alreadyEnabledState,
+        ),
+        isTrue,
+      );
+    },
+  );
+
   test('does not persist last check-in and last check-out timestamps', () {
     final state = CheckingState.initial().copyWith(
       lastDetectedLocation: 'Portaria Principal',
@@ -323,6 +358,55 @@ void main() {
       'android/app/src/main/AndroidManifest.xml',
     ).readAsStringSync();
     expect(manifest, contains('android:stopWithTask="true"'));
+  });
+
+  test('background service only runs when automatic checks are enabled', () {
+    final locationOnlyState = CheckingState.initial().copyWith(
+      locationSharingEnabled: true,
+      autoCheckInEnabled: false,
+      autoCheckOutEnabled: false,
+    );
+    final automaticState = locationOnlyState.copyWith(
+      autoCheckInEnabled: true,
+      autoCheckOutEnabled: true,
+    );
+
+    expect(
+      CheckingBackgroundLocationService.shouldRunForState(locationOnlyState),
+      isFalse,
+    );
+    expect(
+      CheckingBackgroundLocationService.shouldRunForState(automaticState),
+      isTrue,
+    );
+    expect(
+      CheckingController.shouldRunBackgroundLocationService(
+        state: locationOnlyState,
+        backgroundServiceSupported: true,
+      ),
+      isFalse,
+    );
+    expect(
+      CheckingController.shouldRunForegroundLocationStream(
+        state: locationOnlyState,
+        backgroundServiceSupported: true,
+      ),
+      isTrue,
+    );
+    expect(
+      CheckingController.shouldRunBackgroundLocationService(
+        state: automaticState,
+        backgroundServiceSupported: true,
+      ),
+      isTrue,
+    );
+    expect(
+      CheckingController.shouldRunForegroundLocationStream(
+        state: automaticState,
+        backgroundServiceSupported: true,
+      ),
+      isFalse,
+    );
   });
 
   test('shows separated labels for location search and automatic checks', () {
@@ -977,6 +1061,7 @@ class _FakeCheckingStorageService extends CheckingStorageService {
 
   final CheckingState initialState;
   final List<CheckingState> savedStates = <CheckingState>[];
+  bool promptedInitialAndroidSetup = true;
 
   @override
   Future<CheckingState> loadState() async {
@@ -986,6 +1071,16 @@ class _FakeCheckingStorageService extends CheckingStorageService {
   @override
   Future<void> saveState(CheckingState state) async {
     savedStates.add(state);
+  }
+
+  @override
+  Future<bool> hasPromptedInitialAndroidSetup() async {
+    return promptedInitialAndroidSetup;
+  }
+
+  @override
+  Future<void> markInitialAndroidSetupPrompted() async {
+    promptedInitialAndroidSetup = true;
   }
 }
 
@@ -1051,6 +1146,9 @@ class _DelayedRecordingCheckingApiService extends _RecordingCheckingApiService {
 }
 
 class _FakeCheckingAndroidBridge extends CheckingAndroidBridge {
+  @override
+  bool get isSupported => false;
+
   @override
   Future<void> initialize({
     required Future<void> Function(String action) onNativeAction,

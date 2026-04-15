@@ -45,6 +45,7 @@ class CheckingState {
     required this.locationUpdateIntervalSeconds,
     required this.locationAccuracyThresholdMeters,
     required this.locationSharingEnabled,
+    required this.canEnableLocationSharing,
     required this.autoCheckInEnabled,
     required this.autoCheckOutEnabled,
     required this.lastMatchedLocation,
@@ -74,6 +75,7 @@ class CheckingState {
       locationUpdateIntervalSeconds: 60,
       locationAccuracyThresholdMeters: 30,
       locationSharingEnabled: false,
+      canEnableLocationSharing: false,
       autoCheckInEnabled: false,
       autoCheckOutEnabled: false,
       lastMatchedLocation: null,
@@ -152,6 +154,7 @@ class CheckingState {
       locationAccuracyThresholdMeters:
           (json['locationAccuracyThresholdMeters'] as num?)?.toInt() ?? 30,
       locationSharingEnabled: locationSharingEnabled,
+      canEnableLocationSharing: false,
       autoCheckInEnabled: autoCheckInEnabled,
       autoCheckOutEnabled: autoCheckOutEnabled,
       lastMatchedLocation: _normalizeOptionalText(
@@ -188,6 +191,7 @@ class CheckingState {
   final int locationUpdateIntervalSeconds;
   final int locationAccuracyThresholdMeters;
   final bool locationSharingEnabled;
+  final bool canEnableLocationSharing;
   final bool autoCheckInEnabled;
   final bool autoCheckOutEnabled;
   final String? lastMatchedLocation;
@@ -318,6 +322,7 @@ class CheckingState {
     int? locationUpdateIntervalSeconds,
     int? locationAccuracyThresholdMeters,
     bool? locationSharingEnabled,
+    bool? canEnableLocationSharing,
     bool? autoCheckInEnabled,
     bool? autoCheckOutEnabled,
     Object? lastMatchedLocation = _unset,
@@ -349,6 +354,8 @@ class CheckingState {
           this.locationAccuracyThresholdMeters,
       locationSharingEnabled:
           locationSharingEnabled ?? this.locationSharingEnabled,
+      canEnableLocationSharing:
+          canEnableLocationSharing ?? this.canEnableLocationSharing,
       autoCheckInEnabled: autoCheckInEnabled ?? this.autoCheckInEnabled,
       autoCheckOutEnabled: autoCheckOutEnabled ?? this.autoCheckOutEnabled,
       lastMatchedLocation: identical(lastMatchedLocation, _unset)

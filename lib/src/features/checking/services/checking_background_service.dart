@@ -141,6 +141,11 @@ class CheckingBackgroundLocationService {
   static bool get isSupported =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
+  @visibleForTesting
+  static bool shouldRunForState(CheckingState state) {
+    return state.locationSharingEnabled && state.hasAnyLocationAutomation;
+  }
+
   static void initialize() {
     if (!isSupported || _initialized) {
       return;
@@ -218,28 +223,34 @@ class CheckingBackgroundLocationService {
 
     initialize();
 
-    if (interactive) {
-      try {
-        final notificationPermission =
-            await FlutterForegroundTask.checkNotificationPermission();
-        if (notificationPermission != NotificationPermission.granted) {
-          final requestedPermission =
-              await FlutterForegroundTask.requestNotificationPermission();
-          if (requestedPermission != NotificationPermission.granted) {
-            if (requestedPermission ==
-                NotificationPermission.permanently_denied) {
-              await openAppSettings();
-            }
-            return const CheckingBackgroundStartResult(
-              ready: false,
-              blockingMessage:
-                  'Permita as notificações do aplicativo para manter o monitoramento em segundo plano.',
-            );
-          }
+    try {
+      final notificationPermission =
+          await FlutterForegroundTask.checkNotificationPermission();
+      if (notificationPermission != NotificationPermission.granted) {
+        if (!interactive) {
+          return const CheckingBackgroundStartResult(
+            ready: false,
+            blockingMessage:
+                'Permita as notificações do aplicativo para habilitar a busca por localização.',
+          );
         }
-      } on MissingPluginException {
-        return const CheckingBackgroundStartResult(ready: true);
+
+        final requestedPermission =
+            await FlutterForegroundTask.requestNotificationPermission();
+        if (requestedPermission != NotificationPermission.granted) {
+          if (requestedPermission ==
+              NotificationPermission.permanently_denied) {
+            await openAppSettings();
+          }
+          return const CheckingBackgroundStartResult(
+            ready: false,
+            blockingMessage:
+                'Permita as notificações do aplicativo para manter o monitoramento em segundo plano.',
+          );
+        }
       }
+    } on MissingPluginException {
+      return const CheckingBackgroundStartResult(ready: true);
     }
 
     if (!interactive) {
@@ -363,6 +374,7 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
 
   StreamSubscription<Position>? _positionSubscription;
   Timer? _scheduleBoundaryTimer;
+  Timer? _locationCaptureTimer;
   MobileStateResponse? _lastKnownRemoteState;
   DateTime? _lastKnownRemoteStateAt;
   int? _currentIntervalSeconds;
@@ -382,6 +394,8 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
     _positionSubscription = null;
     _scheduleBoundaryTimer?.cancel();
     _scheduleBoundaryTimer = null;
+    _locationCaptureTimer?.cancel();
+    _locationCaptureTimer = null;
     _lastKnownRemoteState = null;
     _lastKnownRemoteStateAt = null;
     _currentIntervalSeconds = null;
@@ -407,11 +421,13 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
     final state = CheckingLocationLogic.resolveLocationUpdateIntervalState(
       await _storageService.loadState(),
     );
-    if (!state.locationSharingEnabled) {
+    if (!CheckingBackgroundLocationService.shouldRunForState(state)) {
       await _positionSubscription?.cancel();
       _positionSubscription = null;
       _scheduleBoundaryTimer?.cancel();
       _scheduleBoundaryTimer = null;
+      _locationCaptureTimer?.cancel();
+      _locationCaptureTimer = null;
       _currentIntervalSeconds = null;
       await _stopService();
       return;
@@ -478,6 +494,7 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
             );
           },
         );
+    _restartLocationCaptureTimer(state);
 
     try {
       final initialPosition = await Geolocator.getCurrentPosition(
@@ -488,6 +505,27 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
       await _handlePositionUpdate(initialPosition);
     } catch (_) {
       // A stream continua tentando as próximas leituras.
+    }
+  }
+
+  void _restartLocationCaptureTimer(CheckingState state) {
+    _locationCaptureTimer?.cancel();
+    _locationCaptureTimer = Timer.periodic(
+      Duration(seconds: max(1, state.locationUpdateIntervalSeconds)),
+      (_) => unawaited(_captureCurrentPositionNow()),
+    );
+  }
+
+  Future<void> _captureCurrentPositionNow() async {
+    try {
+      final currentPosition = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.best,
+        ),
+      );
+      await _handlePositionUpdate(currentPosition);
+    } catch (_) {
+      // O serviço continua tentando as próximas leituras periódicas ou da stream.
     }
   }
 

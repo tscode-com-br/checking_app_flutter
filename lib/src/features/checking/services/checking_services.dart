@@ -20,6 +20,8 @@ class CheckingApiException implements Exception {
 class CheckingStorageService {
   static const _prefsKey = 'checking_flutter_state_v1';
   static const _secureApiSharedKey = 'checking_flutter_api_shared_key';
+  static const _initialAndroidSetupPromptedKey =
+      'checking_flutter_initial_android_setup_prompted_v1';
 
   const CheckingStorageService({
     this.secureStorage = const FlutterSecureStorage(),
@@ -64,6 +66,16 @@ class CheckingStorageService {
     } else {
       await secureStorage.write(key: _secureApiSharedKey, value: secureValue);
     }
+  }
+
+  Future<bool> hasPromptedInitialAndroidSetup() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_initialAndroidSetupPromptedKey) ?? false;
+  }
+
+  Future<void> markInitialAndroidSetupPrompted() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_initialAndroidSetupPromptedKey, true);
   }
 }
 

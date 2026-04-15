@@ -44,6 +44,7 @@ class CheckingController extends ChangeNotifier {
   RegistroType? _lastNativeAction;
   Timer? _historyRefreshTimer;
   Timer? _locationUpdateIntervalTimer;
+  Timer? _locationCaptureTimer;
   StreamSubscription<Position>? _positionSubscription;
   List<ManagedLocation> _managedLocations = const [];
   bool _processingLocationUpdate = false;
@@ -74,6 +75,11 @@ class CheckingController extends ChangeNotifier {
       notifyListeners();
       await _androidBridge.initialize(onNativeAction: _handleNativeAction);
       await _syncNativeAutomation();
+      await _refreshLocationSharingAvailability(
+        interactive: false,
+        updateStatus: false,
+      );
+      await _runInitialAndroidSetupIfNeeded();
       if (_state.hasApiConfig && _state.hasValidChave) {
         await syncHistory(silent: true, updateStatus: true);
         _restartHistoryAutoRefresh();
@@ -166,6 +172,14 @@ class CheckingController extends ChangeNotifier {
       return;
     }
 
+    if (value && !_state.canEnableLocationSharing) {
+      _setStatus(
+        'Permita localização precisa, localização em segundo plano e notificações para habilitar a busca por localização.',
+        StatusTone.error,
+      );
+      return;
+    }
+
     if (!value) {
       await _stopLocationTracking();
       _updateAndPersist(
@@ -244,7 +258,7 @@ class CheckingController extends ChangeNotifier {
         else
           automaticCheckEnabled
               ? 'Busca por localização ativada com check-in/check-out automáticos habilitados.'
-              : 'Busca por localização ativada. O aplicativo atualizará a localização automaticamente, sem executar check-in/check-out automático.',
+              : 'Busca por localização ativada. Sem a automação, a localização será atualizada somente com o aplicativo em uso.',
         if (oemSetupResult.message.isNotEmpty) oemSetupResult.message,
       ];
       final hasWarning =
@@ -312,11 +326,9 @@ class CheckingController extends ChangeNotifier {
               previousLastCheckIn != _state.lastCheckIn ||
               previousLastCheckOut != _state.lastCheckOut;
         }
-        if (CheckingBackgroundLocationService.isSupported) {
-          await _refreshBackgroundLocationService();
-        }
-      } else if (CheckingBackgroundLocationService.isSupported) {
-        await _refreshBackgroundLocationService();
+        await _restartLocationTracking();
+      } else {
+        await _restartLocationTracking();
       }
 
       if (value) {
@@ -333,7 +345,7 @@ class CheckingController extends ChangeNotifier {
 
       _setStatus(
         _state.locationSharingEnabled
-            ? 'Check-in/Check-out automáticos desativados. A busca por localização continuará ativa.'
+            ? 'Check-in/Check-out automáticos desativados. A busca por localização continuará ativa somente com o aplicativo em uso.'
             : 'Check-in/Check-out automáticos desativados.',
         StatusTone.warning,
       );
@@ -348,6 +360,16 @@ class CheckingController extends ChangeNotifier {
 
   Future<void> setAutoCheckOutEnabled(bool value) async {
     await setAutomaticCheckInOutEnabled(value);
+  }
+
+  Future<void> refreshLocationSharingAvailability({
+    bool interactive = false,
+    bool updateStatus = false,
+  }) async {
+    await _refreshLocationSharingAvailability(
+      interactive: interactive,
+      updateStatus: updateStatus,
+    );
   }
 
   Future<String> syncHistory({
@@ -576,6 +598,36 @@ class CheckingController extends ChangeNotifier {
   }
 
   @visibleForTesting
+  static bool isLocationSharingToggleInteractive({
+    required CheckingState state,
+  }) {
+    return (state.locationSharingEnabled || state.canEnableLocationSharing) &&
+        !state.isLocationUpdating &&
+        !state.isAutomaticCheckingUpdating;
+  }
+
+  @visibleForTesting
+  static bool shouldRunBackgroundLocationService({
+    required CheckingState state,
+    required bool backgroundServiceSupported,
+  }) {
+    return backgroundServiceSupported &&
+        CheckingBackgroundLocationService.shouldRunForState(state);
+  }
+
+  @visibleForTesting
+  static bool shouldRunForegroundLocationStream({
+    required CheckingState state,
+    required bool backgroundServiceSupported,
+  }) {
+    return state.locationSharingEnabled &&
+        !shouldRunBackgroundLocationService(
+          state: state,
+          backgroundServiceSupported: backgroundServiceSupported,
+        );
+  }
+
+  @visibleForTesting
   static bool resolveControlFlagAfterSnapshot({
     required bool currentValue,
     required bool snapshotLocationSharingEnabled,
@@ -626,6 +678,94 @@ class CheckingController extends ChangeNotifier {
   }) {
     return CheckingLocationLogic.delayUntilNextLocationUpdateIntervalBoundary(
       referenceTime: referenceTime,
+    );
+  }
+
+  Future<void> _runInitialAndroidSetupIfNeeded() async {
+    if (!_androidBridge.isSupported) {
+      _setState(_state.copyWith(canEnableLocationSharing: true));
+      return;
+    }
+
+    if (await _storageService.hasPromptedInitialAndroidSetup()) {
+      return;
+    }
+
+    await _refreshLocationSharingAvailability(
+      interactive: true,
+      updateStatus: true,
+    );
+    await _storageService.markInitialAndroidSetupPrompted();
+  }
+
+  Future<void> _refreshLocationSharingAvailability({
+    required bool interactive,
+    required bool updateStatus,
+  }) async {
+    if (!_androidBridge.isSupported) {
+      _setState(_state.copyWith(canEnableLocationSharing: true));
+      return;
+    }
+
+    final permissionResult = await _ensureLocationPermissionGranted(
+      interactive: interactive,
+    );
+    final backgroundStartResult =
+        await CheckingBackgroundLocationService.ensureReadyForStart(
+          interactive: interactive,
+        );
+    final canEnableLocationSharing =
+        permissionResult.granted && backgroundStartResult.ready;
+    final oemSetupResult = interactive && canEnableLocationSharing
+        ? await _androidBridge.requestOemBackgroundSetup()
+        : CheckingOemBackgroundSetupResult.empty;
+
+    var nextState = _state.copyWith(
+      canEnableLocationSharing: canEnableLocationSharing,
+      isLocationUpdating: false,
+    );
+    if (!canEnableLocationSharing && _state.locationSharingEnabled) {
+      await _stopLocationTracking();
+      nextState = nextState.copyWith(
+        locationSharingEnabled: false,
+        lastMatchedLocation: null,
+      );
+      _updateAndPersist(nextState, syncAutomation: false);
+      await flushStatePersistence();
+    } else {
+      _setState(nextState);
+    }
+
+    if (!updateStatus) {
+      return;
+    }
+
+    final statusSegments = <String>[
+      if (!permissionResult.granted && permissionResult.message.isNotEmpty)
+        permissionResult.message
+      else if (!backgroundStartResult.ready &&
+          backgroundStartResult.blockingMessage.isNotEmpty)
+        backgroundStartResult.blockingMessage
+      else if (backgroundStartResult.warningMessage.isEmpty &&
+          oemSetupResult.message.isEmpty)
+        'Configuração inicial do Android concluída.',
+      if (backgroundStartResult.warningMessage.isNotEmpty)
+        backgroundStartResult.warningMessage,
+      if (oemSetupResult.message.isNotEmpty) oemSetupResult.message,
+    ];
+
+    if (statusSegments.isEmpty) {
+      return;
+    }
+
+    _setStatus(
+      statusSegments.join(' '),
+      !canEnableLocationSharing
+          ? StatusTone.error
+          : (backgroundStartResult.warningMessage.isNotEmpty ||
+                oemSetupResult.message.isNotEmpty)
+          ? StatusTone.warning
+          : StatusTone.success,
     );
   }
 
@@ -702,9 +842,16 @@ class CheckingController extends ChangeNotifier {
   }
 
   Future<void> _startLocationTracking() async {
-    if (CheckingBackgroundLocationService.isSupported) {
+    if (_shouldRunBackgroundLocationService(_state)) {
+      _stopLocationCaptureTimer();
+      await _positionSubscription?.cancel();
+      _positionSubscription = null;
       await _refreshBackgroundLocationService();
       return;
+    }
+
+    if (CheckingBackgroundLocationService.isSupported) {
+      await CheckingBackgroundLocationService.stop();
     }
 
     if (_positionSubscription != null) {
@@ -712,6 +859,7 @@ class CheckingController extends ChangeNotifier {
     }
 
     await refreshLocationUpdateInterval(restartLocationTrackingIfNeeded: false);
+    _restartLocationCaptureTimer();
     final locationSettings = _buildLocationSettings();
     _positionSubscription =
         Geolocator.getPositionStream(locationSettings: locationSettings).listen(
@@ -743,9 +891,16 @@ class CheckingController extends ChangeNotifier {
 
     await _captureCurrentPositionNow();
 
-    if (CheckingBackgroundLocationService.isSupported) {
+    if (_shouldRunBackgroundLocationService(_state)) {
+      _stopLocationCaptureTimer();
+      await _positionSubscription?.cancel();
+      _positionSubscription = null;
       await _refreshBackgroundLocationService();
       return;
+    }
+
+    if (CheckingBackgroundLocationService.isSupported) {
+      await CheckingBackgroundLocationService.stop();
     }
 
     if (_positionSubscription == null) {
@@ -771,6 +926,7 @@ class CheckingController extends ChangeNotifier {
   }
 
   Future<void> _stopLocationTracking() async {
+    _stopLocationCaptureTimer();
     if (CheckingBackgroundLocationService.isSupported) {
       await CheckingBackgroundLocationService.stop();
     }
@@ -779,13 +935,26 @@ class CheckingController extends ChangeNotifier {
   }
 
   Future<void> _restartLocationTracking() async {
-    if (CheckingBackgroundLocationService.isSupported) {
-      await _refreshBackgroundLocationService();
+    await _stopLocationTracking();
+    await _startLocationTracking();
+  }
+
+  void _restartLocationCaptureTimer() {
+    _stopLocationCaptureTimer();
+    if (!_state.locationSharingEnabled ||
+        _shouldRunBackgroundLocationService(_state)) {
       return;
     }
 
-    await _stopLocationTracking();
-    await _startLocationTracking();
+    _locationCaptureTimer = Timer.periodic(
+      Duration(seconds: max(1, _state.locationUpdateIntervalSeconds)),
+      (_) => unawaited(_captureCurrentPositionNow()),
+    );
+  }
+
+  void _stopLocationCaptureTimer() {
+    _locationCaptureTimer?.cancel();
+    _locationCaptureTimer = null;
   }
 
   LocationSettings _buildLocationSettings() {
@@ -1289,10 +1458,12 @@ class CheckingController extends ChangeNotifier {
   }
 
   Future<bool> _isLocationTrackingActive() async {
+    final hasForegroundStream = _positionSubscription != null;
     if (CheckingBackgroundLocationService.isSupported) {
-      return CheckingBackgroundLocationService.isRunning();
+      return hasForegroundStream ||
+          await CheckingBackgroundLocationService.isRunning();
     }
-    return _positionSubscription != null;
+    return hasForegroundStream;
   }
 
   Future<void> _refreshBackgroundLocationService() async {
@@ -1300,7 +1471,7 @@ class CheckingController extends ChangeNotifier {
       return;
     }
 
-    if (!_state.locationSharingEnabled) {
+    if (!_shouldRunBackgroundLocationService(_state)) {
       await CheckingBackgroundLocationService.stop();
       return;
     }
@@ -1325,6 +1496,13 @@ class CheckingController extends ChangeNotifier {
     await flushStatePersistence();
     await CheckingBackgroundLocationService.start();
     await CheckingBackgroundLocationService.requestRefresh();
+  }
+
+  bool _shouldRunBackgroundLocationService(CheckingState state) {
+    return shouldRunBackgroundLocationService(
+      state: state,
+      backgroundServiceSupported: CheckingBackgroundLocationService.isSupported,
+    );
   }
 
   void _handleBackgroundLocationSnapshot(
@@ -1460,6 +1638,7 @@ class CheckingController extends ChangeNotifier {
   void dispose() {
     _stopHistoryAutoRefresh();
     _stopLocationUpdateIntervalBoundaryTimer();
+    _stopLocationCaptureTimer();
     if (CheckingBackgroundLocationService.isSupported) {
       CheckingBackgroundLocationService.removeListener(
         _backgroundLocationListener,

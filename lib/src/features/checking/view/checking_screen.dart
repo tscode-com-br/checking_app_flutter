@@ -39,6 +39,7 @@ class _CheckingScreenState extends State<CheckingScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(_controller.refreshLocationUpdateInterval());
+      unawaited(_controller.refreshLocationSharingAvailability());
       return;
     }
 
@@ -504,10 +505,11 @@ class _LocationAutomationSheet extends StatelessWidget {
                 label: 'Busca por Localização:',
                 value: state.locationSharingEnabled,
                 onChanged:
-                    state.isLocationUpdating ||
-                        state.isAutomaticCheckingUpdating
-                    ? null
-                    : onLocationSharingChanged,
+                    CheckingController.isLocationSharingToggleInteractive(
+                      state: state,
+                    )
+                    ? onLocationSharingChanged
+                    : null,
               ),
               const SizedBox(height: 12),
               _SwitchRow(

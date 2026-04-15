@@ -35,6 +35,8 @@ class CheckingOemBackgroundSetupResult {
 class CheckingAndroidBridge {
   static const MethodChannel _channel = MethodChannel('checking/android');
 
+  bool get isSupported => _isSupported;
+
   Future<void> initialize({
     required Future<void> Function(String action) onNativeAction,
   }) async {
