@@ -665,7 +665,6 @@ class CheckingController extends ChangeNotifier {
     );
   }
 
-  @visibleForTesting
   static bool isLocationSharingToggleInteractive({
     required CheckingState state,
   }) {
@@ -703,12 +702,10 @@ class CheckingController extends ChangeNotifier {
     return snapshotLocationSharingEnabled ? currentValue : false;
   }
 
-  @visibleForTesting
   static bool isAutomaticCheckingEnabledInUi({required CheckingState state}) {
     return state.locationSharingEnabled && state.automaticCheckInOutEnabled;
   }
 
-  @visibleForTesting
   static bool isAutomaticCheckingToggleInteractive({
     required CheckingState state,
   }) {
@@ -724,7 +721,6 @@ class CheckingController extends ChangeNotifier {
     );
   }
 
-  @visibleForTesting
   static String describeLocationUpdateInterval({DateTime? referenceTime}) {
     return CheckingLocationLogic.describeLocationUpdateInterval(
       referenceTime: referenceTime,
@@ -1029,6 +1025,10 @@ class CheckingController extends ChangeNotifier {
       final matchResult = _resolveLocationMatch(position);
       final matchedLocation = matchResult.matchedLocation;
       final matchedAreaLabel = matchedLocation?.automationAreaLabel;
+      final locationFetchHistory = CheckingLocationLogic.recordLocationFetchHistory(
+        history: _state.locationFetchHistory,
+        timestamp: positionTimestamp,
+      );
       final capturedLocationLabel = resolveCapturedLocationLabel(
         location: matchedLocation,
         nearestWorkplaceDistanceMeters:
@@ -1039,11 +1039,13 @@ class CheckingController extends ChangeNotifier {
               lastMatchedLocation: null,
               lastDetectedLocation: capturedLocationLabel,
               lastLocationUpdateAt: positionTimestamp,
+              locationFetchHistory: locationFetchHistory,
             )
           : _state.copyWith(
               lastMatchedLocation: matchedAreaLabel,
               lastDetectedLocation: capturedLocationLabel,
               lastLocationUpdateAt: positionTimestamp,
+              locationFetchHistory: locationFetchHistory,
             );
 
       _updateAndPersist(nextState, syncAutomation: false);
@@ -1585,6 +1587,7 @@ class CheckingController extends ChangeNotifier {
         lastMatchedLocation: snapshot.lastMatchedLocation,
         lastDetectedLocation: snapshot.lastDetectedLocation,
         lastLocationUpdateAt: snapshot.lastLocationUpdateAt,
+        locationFetchHistory: snapshot.locationFetchHistory,
         lastCheckInLocation: shouldApplySnapshotHistory
             ? snapshot.lastCheckInLocation
             : _state.lastCheckInLocation,

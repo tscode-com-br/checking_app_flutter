@@ -51,6 +51,7 @@ class CheckingState {
     required this.lastMatchedLocation,
     required this.lastDetectedLocation,
     required this.lastLocationUpdateAt,
+    required this.locationFetchHistory,
     required this.lastCheckInLocation,
     required this.lastCheckIn,
     required this.lastCheckOut,
@@ -81,6 +82,7 @@ class CheckingState {
       lastMatchedLocation: null,
       lastDetectedLocation: null,
       lastLocationUpdateAt: null,
+      locationFetchHistory: <DateTime>[],
       lastCheckInLocation: null,
       lastCheckIn: null,
       lastCheckOut: null,
@@ -166,6 +168,9 @@ class CheckingState {
       lastLocationUpdateAt: _parseOptionalDateTime(
         json['lastLocationUpdateAt'] as String?,
       ),
+      locationFetchHistory: _parseOptionalDateTimeList(
+        json['locationFetchHistory'],
+      ),
       lastCheckInLocation: _normalizeOptionalText(
         json['lastCheckInLocation'] as String?,
       ),
@@ -197,6 +202,7 @@ class CheckingState {
   final String? lastMatchedLocation;
   final String? lastDetectedLocation;
   final DateTime? lastLocationUpdateAt;
+  final List<DateTime> locationFetchHistory;
   final String? lastCheckInLocation;
   final DateTime? lastCheckIn;
   final DateTime? lastCheckOut;
@@ -289,6 +295,18 @@ class CheckingState {
     return DateTime.tryParse(value)?.toLocal();
   }
 
+  static List<DateTime> _parseOptionalDateTimeList(Object? value) {
+    if (value is! List) {
+      return const <DateTime>[];
+    }
+
+    return value
+        .whereType<String>()
+        .map(_parseOptionalDateTime)
+        .whereType<DateTime>()
+        .toList(growable: false);
+  }
+
   Map<String, dynamic> toJson() {
     return <String, dynamic>{
       'chave': chave,
@@ -307,6 +325,9 @@ class CheckingState {
       'lastMatchedLocation': lastMatchedLocation,
       'lastDetectedLocation': lastDetectedLocation,
       'lastLocationUpdateAt': lastLocationUpdateAt?.toUtc().toIso8601String(),
+      'locationFetchHistory': locationFetchHistory
+          .map((value) => value.toUtc().toIso8601String())
+          .toList(growable: false),
       'lastCheckInLocation': lastCheckInLocation,
     };
   }
@@ -328,6 +349,7 @@ class CheckingState {
     Object? lastMatchedLocation = _unset,
     Object? lastDetectedLocation = _unset,
     Object? lastLocationUpdateAt = _unset,
+    Object? locationFetchHistory = _unset,
     Object? lastCheckInLocation = _unset,
     Object? lastCheckIn = _unset,
     Object? lastCheckOut = _unset,
@@ -367,6 +389,9 @@ class CheckingState {
       lastLocationUpdateAt: identical(lastLocationUpdateAt, _unset)
           ? this.lastLocationUpdateAt
           : lastLocationUpdateAt as DateTime?,
+        locationFetchHistory: identical(locationFetchHistory, _unset)
+          ? this.locationFetchHistory
+          : List<DateTime>.unmodifiable(locationFetchHistory as List<DateTime>),
       lastCheckInLocation: identical(lastCheckInLocation, _unset)
           ? this.lastCheckInLocation
           : lastCheckInLocation as String?,

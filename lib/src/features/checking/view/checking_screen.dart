@@ -525,6 +525,23 @@ class _LocationAutomationSheet extends StatelessWidget {
                     : null,
               ),
               const SizedBox(height: 16),
+              OutlinedButton.icon(
+                onPressed: () => _showRecentLocationHistoryDialog(
+                  context,
+                  locationFetchHistory: state.locationFetchHistory,
+                ),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(42),
+                  foregroundColor: AppTheme.textMain,
+                  side: _groupOutlineBorderSide(),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                icon: const Icon(Icons.history_rounded, size: 18),
+                label: const Text('Últimas Localizações'),
+              ),
+              const SizedBox(height: 12),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -581,6 +598,183 @@ class _LocationAutomationSheet extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+Future<void> _showRecentLocationHistoryDialog(
+  BuildContext context, {
+  required List<DateTime> locationFetchHistory,
+}) async {
+  await showDialog<void>(
+    context: context,
+    builder: (dialogContext) {
+      return _RecentLocationHistoryDialog(
+        locationFetchHistory: locationFetchHistory,
+      );
+    },
+  );
+}
+
+class _RecentLocationHistoryDialog extends StatefulWidget {
+  const _RecentLocationHistoryDialog({required this.locationFetchHistory});
+
+  final List<DateTime> locationFetchHistory;
+
+  @override
+  State<_RecentLocationHistoryDialog> createState() =>
+      _RecentLocationHistoryDialogState();
+}
+
+class _RecentLocationHistoryDialogState
+    extends State<_RecentLocationHistoryDialog> {
+  late final ScrollController _scrollController;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController = ScrollController();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final locationFetchHistory = widget.locationFetchHistory;
+    final dateFormatter = DateFormat('dd-MM-yyyy');
+    final timeFormatter = DateFormat('HH:mm:ss');
+    final visibleRowCount = locationFetchHistory.isEmpty
+        ? 1
+        : math.min(5, locationFetchHistory.length);
+
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Últimas Localizações',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 14),
+            DecoratedBox(
+              decoration: _groupOutlineDecoration(),
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const _RecentLocationHistoryRow(
+                      dateText: 'Data',
+                      timeText: 'Hora',
+                      isHeader: true,
+                    ),
+                    const SizedBox(height: 8),
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: visibleRowCount * 44,
+                      ),
+                      child: Scrollbar(
+                        controller: _scrollController,
+                        thumbVisibility: locationFetchHistory.length > 5,
+                        thickness: 4,
+                        radius: const Radius.circular(999),
+                        child: ListView.separated(
+                          controller: _scrollController,
+                          shrinkWrap: true,
+                          itemCount: locationFetchHistory.isEmpty
+                              ? 1
+                              : locationFetchHistory.length,
+                          itemBuilder: (context, index) {
+                            if (locationFetchHistory.isEmpty) {
+                              return const _RecentLocationHistoryRow(
+                                dateText: '--',
+                                timeText: '--',
+                              );
+                            }
+
+                            final locationFetch = locationFetchHistory[index];
+                            return _RecentLocationHistoryRow(
+                              dateText: dateFormatter.format(locationFetch),
+                              timeText: timeFormatter.format(locationFetch),
+                            );
+                          },
+                          separatorBuilder: (context, index) => Divider(
+                            height: 1,
+                            color: AppTheme.border.withValues(alpha: 0.72),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Fechar'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RecentLocationHistoryRow extends StatelessWidget {
+  const _RecentLocationHistoryRow({
+    required this.dateText,
+    required this.timeText,
+    this.isHeader = false,
+  });
+
+  final String dateText;
+  final String timeText;
+  final bool isHeader;
+
+  @override
+  Widget build(BuildContext context) {
+    final textStyle = TextStyle(
+      fontSize: 13,
+      fontWeight: isHeader ? FontWeight.w700 : FontWeight.w600,
+      color: isHeader ? AppTheme.textSoft : AppTheme.textMain,
+    );
+
+    return SizedBox(
+      height: 44,
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              dateText,
+              textAlign: TextAlign.center,
+              style: textStyle,
+            ),
+          ),
+          Expanded(
+            child: Text(
+              timeText,
+              textAlign: TextAlign.center,
+              style: textStyle,
+            ),
+          ),
+        ],
       ),
     );
   }

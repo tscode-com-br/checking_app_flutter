@@ -128,6 +128,10 @@ void main() {
     final state = CheckingState.initial().copyWith(
       lastDetectedLocation: 'Portaria Principal',
       lastLocationUpdateAt: DateTime.utc(2026, 4, 10, 7, 45, 30),
+      locationFetchHistory: <DateTime>[
+        DateTime.utc(2026, 4, 10, 7, 45, 30),
+        DateTime.utc(2026, 4, 10, 7, 30, 0),
+      ],
       lastCheckInLocation: 'Escritório Principal',
       lastCheckIn: DateTime(2026, 4, 9, 8),
       lastCheckOut: DateTime(2026, 4, 9, 18),
@@ -139,7 +143,27 @@ void main() {
     expect(json.containsKey('lastCheckOut'), isFalse);
     expect(json['lastDetectedLocation'], 'Portaria Principal');
     expect(json['lastLocationUpdateAt'], '2026-04-10T07:45:30.000Z');
+    expect(
+      json['locationFetchHistory'],
+      <String>['2026-04-10T07:45:30.000Z', '2026-04-10T07:30:00.000Z'],
+    );
     expect(json['lastCheckInLocation'], 'Escritório Principal');
+  });
+
+  test('restores persisted location fetch history', () {
+    final restored = CheckingState.fromJson({
+      'chave': 'AB12',
+      'locationFetchHistory': <String>[
+        '2026-04-10T07:45:30.000Z',
+        '2026-04-10T07:30:00.000Z',
+      ],
+    });
+
+    expect(restored.locationFetchHistory, hasLength(2));
+    expect(
+      restored.locationFetchHistory.first.toUtc().toIso8601String(),
+      '2026-04-10T07:45:30.000Z',
+    );
   });
 
   test(
@@ -417,6 +441,26 @@ void main() {
 
     expect(screenSource, contains("label: 'Busca por Localização:'"));
     expect(screenSource, contains("label: 'Check-in/Check-out Automáticos:'"));
+    expect(screenSource, contains('Últimas Localizações'));
+  });
+
+  test('caps the location fetch history to the newest ten entries', () {
+    final timestamps = List<DateTime>.generate(
+      12,
+      (index) => DateTime.utc(2026, 4, 10, 7, index),
+    );
+
+    var history = <DateTime>[];
+    for (final timestamp in timestamps) {
+      history = CheckingLocationLogic.recordLocationFetchHistory(
+        history: history,
+        timestamp: timestamp,
+      );
+    }
+
+    expect(history, hasLength(10));
+    expect(history.first, timestamps.last.toLocal());
+    expect(history.last, timestamps[2].toLocal());
   });
 
   test('initializes persisted history during foreground refresh', () async {

@@ -38,6 +38,7 @@ class CheckingBackgroundLocationSnapshot {
     required this.lastMatchedLocation,
     required this.lastDetectedLocation,
     required this.lastLocationUpdateAt,
+    required this.locationFetchHistory,
     required this.lastCheckInLocation,
     required this.lastCheckIn,
     required this.lastCheckOut,
@@ -76,6 +77,7 @@ class CheckingBackgroundLocationSnapshot {
       lastLocationUpdateAt: _readNullableDateTime(
         map['lastLocationUpdateAt'] as num?,
       ),
+      locationFetchHistory: _readDateTimeList(map['locationFetchHistory']),
       lastCheckInLocation: _readNullableString(map['lastCheckInLocation']),
       lastCheckIn: _readNullableDateTime(map['lastCheckIn'] as num?),
       lastCheckOut: _readNullableDateTime(map['lastCheckOut'] as num?),
@@ -98,6 +100,7 @@ class CheckingBackgroundLocationSnapshot {
   final String? lastMatchedLocation;
   final String? lastDetectedLocation;
   final DateTime? lastLocationUpdateAt;
+  final List<DateTime> locationFetchHistory;
   final String? lastCheckInLocation;
   final DateTime? lastCheckIn;
   final DateTime? lastCheckOut;
@@ -117,6 +120,17 @@ class CheckingBackgroundLocationSnapshot {
       return null;
     }
     return DateTime.fromMillisecondsSinceEpoch(value.toInt()).toLocal();
+  }
+
+  static List<DateTime> _readDateTimeList(Object? value) {
+    if (value is! List) {
+      return const <DateTime>[];
+    }
+
+    return value
+        .whereType<num>()
+        .map((entry) => DateTime.fromMillisecondsSinceEpoch(entry.toInt()).toLocal())
+        .toList(growable: false);
   }
 }
 
@@ -141,7 +155,6 @@ class CheckingBackgroundLocationService {
   static bool get isSupported =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
-  @visibleForTesting
   static bool shouldRunForState(CheckingState state) {
     return state.locationSharingEnabled && state.hasAnyLocationAutomation;
   }
@@ -577,6 +590,13 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
         longitude: position.longitude,
       );
       final matchedLocation = matchResult.matchedLocation;
+      final positionTimestamp = CheckingLocationLogic.resolvePositionTimestamp(
+        position,
+      );
+      final locationFetchHistory = CheckingLocationLogic.recordLocationFetchHistory(
+        history: baseState.locationFetchHistory,
+        timestamp: positionTimestamp,
+      );
       final capturedLocationLabel =
           CheckingLocationLogic.resolveCapturedLocationLabel(
             location: matchedLocation,
@@ -587,14 +607,14 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
           ? baseState.copyWith(
               lastMatchedLocation: null,
               lastDetectedLocation: capturedLocationLabel,
-              lastLocationUpdateAt:
-                  CheckingLocationLogic.resolvePositionTimestamp(position),
+              lastLocationUpdateAt: positionTimestamp,
+              locationFetchHistory: locationFetchHistory,
             )
           : baseState.copyWith(
               lastMatchedLocation: matchedLocation.automationAreaLabel,
               lastDetectedLocation: capturedLocationLabel,
-              lastLocationUpdateAt:
-                  CheckingLocationLogic.resolvePositionTimestamp(position),
+              lastLocationUpdateAt: positionTimestamp,
+              locationFetchHistory: locationFetchHistory,
             );
 
       await _storageService.saveState(nextState);
@@ -844,6 +864,9 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
       'lastDetectedLocation': state.lastDetectedLocation,
       'lastLocationUpdateAt':
           state.lastLocationUpdateAt?.millisecondsSinceEpoch,
+        'locationFetchHistory': state.locationFetchHistory
+          .map((value) => value.millisecondsSinceEpoch)
+          .toList(growable: false),
       'lastCheckInLocation': state.lastCheckInLocation,
       'lastCheckIn': state.lastCheckIn?.millisecondsSinceEpoch,
       'lastCheckOut': state.lastCheckOut?.millisecondsSinceEpoch,
