@@ -331,7 +331,7 @@ class CheckingBackgroundLocationService {
     }
 
     try {
-      return FlutterForegroundTask.isRunningService;
+      return await FlutterForegroundTask.isRunningService;
     } on MissingPluginException {
       return false;
     }
@@ -577,15 +577,22 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
         longitude: position.longitude,
       );
       final matchedLocation = matchResult.matchedLocation;
+      final capturedLocationLabel =
+          CheckingLocationLogic.resolveCapturedLocationLabel(
+            location: matchedLocation,
+            nearestWorkplaceDistanceMeters:
+                matchResult.nearestWorkplaceDistanceMeters,
+          );
       final nextState = matchedLocation == null
           ? baseState.copyWith(
               lastMatchedLocation: null,
+              lastDetectedLocation: capturedLocationLabel,
               lastLocationUpdateAt:
                   CheckingLocationLogic.resolvePositionTimestamp(position),
             )
           : baseState.copyWith(
               lastMatchedLocation: matchedLocation.automationAreaLabel,
-              lastDetectedLocation: matchedLocation.local,
+              lastDetectedLocation: capturedLocationLabel,
               lastLocationUpdateAt:
                   CheckingLocationLogic.resolvePositionTimestamp(position),
             );

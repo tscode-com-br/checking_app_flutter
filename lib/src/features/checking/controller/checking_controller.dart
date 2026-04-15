@@ -48,6 +48,7 @@ class CheckingController extends ChangeNotifier {
   StreamSubscription<Position>? _positionSubscription;
   List<ManagedLocation> _managedLocations = const [];
   bool _processingLocationUpdate = false;
+  bool _foregroundRefreshInProgress = false;
   Future<void> _pendingStateSave = Future.value();
   bool _hasHydratedHistoryForCurrentKey = false;
   late final CheckingBackgroundLocationListener _backgroundLocationListener =
@@ -75,24 +76,8 @@ class CheckingController extends ChangeNotifier {
       notifyListeners();
       await _androidBridge.initialize(onNativeAction: _handleNativeAction);
       await _syncNativeAutomation();
-      await _refreshLocationSharingAvailability(
-        interactive: false,
-        updateStatus: false,
-      );
       await _runInitialAndroidSetupIfNeeded();
-      if (_state.hasApiConfig && _state.hasValidChave) {
-        await syncHistory(silent: true, updateStatus: true);
-        _restartHistoryAutoRefresh();
-      } else {
-        _stopHistoryAutoRefresh();
-        _clearHistoryFields(updateStatus: true);
-      }
-      if (_state.hasApiConfig) {
-        await refreshLocationsCatalog(silent: true, updateStatus: false);
-      }
-      if (_state.locationSharingEnabled) {
-        await _restoreLocationSharing();
-      }
+      await refreshAfterEnteringForeground();
     } catch (_) {
       _setState(
         CheckingState.initial().copyWith(
@@ -372,6 +357,78 @@ class CheckingController extends ChangeNotifier {
     );
   }
 
+  Future<void> refreshAfterEnteringForeground() async {
+    if (_foregroundRefreshInProgress) {
+      return;
+    }
+
+    _foregroundRefreshInProgress = true;
+    _hasHydratedHistoryForCurrentKey = false;
+    _setState(
+      _state.copyWith(
+        lastMatchedLocation: null,
+        lastDetectedLocation: null,
+        lastLocationUpdateAt: null,
+        lastCheckInLocation: null,
+        lastCheckIn: null,
+        lastCheckOut: null,
+        statusMessage: 'Atualização em andamento. Aguarde.',
+        statusTone: StatusTone.warning,
+        isLoading: false,
+      ),
+    );
+
+    try {
+      if (_state.locationSharingEnabled) {
+        await _stopLocationTracking();
+      }
+
+      await _refreshLocationSharingAvailability(
+        interactive: false,
+        updateStatus: false,
+      );
+
+      if (!_state.hasValidChave || !_state.hasApiConfig) {
+        _stopHistoryAutoRefresh();
+        _clearHistoryFields(updateStatus: true);
+        return;
+      }
+
+      try {
+        await syncHistory(silent: false, updateStatus: false);
+      } catch (error) {
+        final message = error is CheckingApiException
+            ? error.message
+            : 'Falha ao consultar a API.';
+        _setStatus(message, StatusTone.error);
+        return;
+      }
+      _restartHistoryAutoRefresh();
+
+      if (!_state.locationSharingEnabled) {
+        _setState(
+          _state.copyWith(
+            lastMatchedLocation: null,
+            lastDetectedLocation: null,
+            lastLocationUpdateAt: null,
+          ),
+        );
+        _setStatus('Atividades atualizadas.', StatusTone.success);
+        return;
+      }
+
+      await refreshLocationUpdateInterval(
+        restartLocationTrackingIfNeeded: false,
+      );
+      await refreshLocationsCatalog(silent: true, updateStatus: false);
+      await _captureCurrentPositionNow();
+      await _restartLocationTracking(captureImmediately: false);
+      _setStatus('Atividades e localização atualizadas.', StatusTone.success);
+    } finally {
+      _foregroundRefreshInProgress = false;
+    }
+  }
+
   Future<String> syncHistory({
     bool silent = false,
     bool updateStatus = true,
@@ -598,6 +655,17 @@ class CheckingController extends ChangeNotifier {
   }
 
   @visibleForTesting
+  static String? resolveCapturedLocationLabel({
+    ManagedLocation? location,
+    double? nearestWorkplaceDistanceMeters,
+  }) {
+    return CheckingLocationLogic.resolveCapturedLocationLabel(
+      location: location,
+      nearestWorkplaceDistanceMeters: nearestWorkplaceDistanceMeters,
+    );
+  }
+
+  @visibleForTesting
   static bool isLocationSharingToggleInteractive({
     required CheckingState state,
   }) {
@@ -801,47 +869,7 @@ class CheckingController extends ChangeNotifier {
     }
   }
 
-  Future<void> _restoreLocationSharing() async {
-    final permissionResult = await _ensureLocationPermissionGranted(
-      interactive: false,
-    );
-    if (!permissionResult.granted) {
-      await _stopLocationTracking();
-      _updateAndPersist(
-        _state.copyWith(
-          locationSharingEnabled: false,
-          autoCheckInEnabled: false,
-          autoCheckOutEnabled: false,
-          lastMatchedLocation: null,
-        ),
-        syncAutomation: false,
-      );
-      await flushStatePersistence();
-      if (permissionResult.message.isNotEmpty) {
-        _setStatus(permissionResult.message, StatusTone.warning);
-      }
-      return;
-    }
-
-    try {
-      await _refreshLocationTrackingNow();
-    } catch (_) {
-      _updateAndPersist(
-        _state.copyWith(
-          locationSharingEnabled: false,
-          autoCheckInEnabled: false,
-          autoCheckOutEnabled: false,
-        ),
-        syncAutomation: false,
-      );
-      _setStatus(
-        'Não foi possível retomar o monitoramento de localização.',
-        StatusTone.error,
-      );
-    }
-  }
-
-  Future<void> _startLocationTracking() async {
+  Future<void> _startLocationTracking({bool captureImmediately = true}) async {
     if (_shouldRunBackgroundLocationService(_state)) {
       _stopLocationCaptureTimer();
       await _positionSubscription?.cancel();
@@ -872,15 +900,17 @@ class CheckingController extends ChangeNotifier {
           },
         );
 
-    try {
-      final initialPosition = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.best,
-        ),
-      );
-      await _handlePositionUpdate(initialPosition);
-    } catch (_) {
-      // A stream continua tentando as próximas leituras.
+    if (captureImmediately) {
+      try {
+        final initialPosition = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.best,
+          ),
+        );
+        await _handlePositionUpdate(initialPosition);
+      } catch (_) {
+        // A stream continua tentando as próximas leituras.
+      }
     }
   }
 
@@ -934,9 +964,11 @@ class CheckingController extends ChangeNotifier {
     _positionSubscription = null;
   }
 
-  Future<void> _restartLocationTracking() async {
+  Future<void> _restartLocationTracking({
+    bool captureImmediately = true,
+  }) async {
     await _stopLocationTracking();
-    await _startLocationTracking();
+    await _startLocationTracking(captureImmediately: captureImmediately);
   }
 
   void _restartLocationCaptureTimer() {
@@ -997,14 +1029,20 @@ class CheckingController extends ChangeNotifier {
       final matchResult = _resolveLocationMatch(position);
       final matchedLocation = matchResult.matchedLocation;
       final matchedAreaLabel = matchedLocation?.automationAreaLabel;
+      final capturedLocationLabel = resolveCapturedLocationLabel(
+        location: matchedLocation,
+        nearestWorkplaceDistanceMeters:
+            matchResult.nearestWorkplaceDistanceMeters,
+      );
       final nextState = matchedLocation == null
           ? _state.copyWith(
               lastMatchedLocation: null,
+              lastDetectedLocation: capturedLocationLabel,
               lastLocationUpdateAt: positionTimestamp,
             )
           : _state.copyWith(
               lastMatchedLocation: matchedAreaLabel,
-              lastDetectedLocation: matchedLocation.local,
+              lastDetectedLocation: capturedLocationLabel,
               lastLocationUpdateAt: positionTimestamp,
             );
 
@@ -1430,7 +1468,9 @@ class CheckingController extends ChangeNotifier {
     _historyRefreshTimer = Timer.periodic(_historyRefreshInterval, (_) {
       if (!_state.hasValidChave ||
           !_state.hasApiConfig ||
-          _state.isSubmitting) {
+          _state.isSubmitting ||
+          _foregroundRefreshInProgress ||
+          _state.isSyncing) {
         return;
       }
       unawaited(syncHistory(silent: true, updateStatus: false));
@@ -1508,6 +1548,10 @@ class CheckingController extends ChangeNotifier {
   void _handleBackgroundLocationSnapshot(
     CheckingBackgroundLocationSnapshot snapshot,
   ) {
+    if (_foregroundRefreshInProgress) {
+      return;
+    }
+
     if (snapshot.chave != _state.chave) {
       return;
     }

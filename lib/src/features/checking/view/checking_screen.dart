@@ -38,8 +38,7 @@ class _CheckingScreenState extends State<CheckingScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      unawaited(_controller.refreshLocationUpdateInterval());
-      unawaited(_controller.refreshLocationSharingAvailability());
+      unawaited(_controller.refreshAfterEnteringForeground());
       return;
     }
 
@@ -634,7 +633,7 @@ class _CapturedLocationCard extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           Text(
-            hasLocation ? locationName! : 'Fora dos Locais Cadastrados',
+            hasLocation ? locationName! : '',
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 15,

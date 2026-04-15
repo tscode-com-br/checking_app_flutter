@@ -8,6 +8,7 @@ import 'package:checking/src/features/checking/models/managed_location.dart';
 import 'package:checking/src/features/checking/models/mobile_state.dart';
 import 'package:checking/src/features/checking/services/checking_android_bridge.dart';
 import 'package:checking/src/features/checking/services/checking_background_service.dart';
+import 'package:checking/src/features/checking/services/checking_location_logic.dart';
 import 'package:checking/src/features/checking/services/checking_services.dart';
 import 'package:checking/src/features/checking/services/location_catalog_service.dart';
 import 'package:checking/src/features/checking/view/checking_screen.dart';
@@ -418,36 +419,34 @@ void main() {
     expect(screenSource, contains("label: 'Check-in/Check-out Automáticos:'"));
   });
 
-  test(
-    'initializes persisted history before refreshing the location catalog',
-    () async {
-      final storageService = _FakeCheckingStorageService(
-        initialState: CheckingState.initial().copyWith(
-          chave: 'AB12',
-          apiBaseUrl: 'https://example.com',
-          apiSharedKey: 'shared-key',
-        ),
-      );
-      final apiService = _RecordingCheckingApiService();
-      final locationCatalogService = _RecordingLocationCatalogService();
-      final controller = CheckingController(
-        storageService: storageService,
-        apiService: apiService,
-        androidBridge: _FakeCheckingAndroidBridge(),
-        locationCatalogService: locationCatalogService,
-      );
+  test('initializes persisted history during foreground refresh', () async {
+    final storageService = _FakeCheckingStorageService(
+      initialState: CheckingState.initial().copyWith(
+        chave: 'AB12',
+        apiBaseUrl: 'https://example.com',
+        apiSharedKey: 'shared-key',
+      ),
+    );
+    final apiService = _RecordingCheckingApiService();
+    final locationCatalogService = _RecordingLocationCatalogService();
+    final controller = CheckingController(
+      storageService: storageService,
+      apiService: apiService,
+      androidBridge: _FakeCheckingAndroidBridge(),
+      locationCatalogService: locationCatalogService,
+    );
 
-      await controller.initialize();
-      await controller.waitForPendingStatePersistence();
+    await controller.initialize();
+    await controller.waitForPendingStatePersistence();
 
-      expect(apiService.calls, <String>['fetchState', 'fetchLocations']);
-      expect(locationCatalogService.replaceCalls, 1);
-      expect(controller.state.lastCheckIn, isNotNull);
-      expect(controller.state.lastCheckOut, isNotNull);
+    expect(apiService.calls, <String>['fetchState']);
+    expect(locationCatalogService.replaceCalls, 0);
+    expect(controller.state.lastCheckIn, isNotNull);
+    expect(controller.state.lastCheckOut, isNotNull);
+    expect(controller.state.statusMessage, 'Atividades atualizadas.');
 
-      controller.dispose();
-    },
-  );
+    controller.dispose();
+  });
 
   test(
     'keeps last check-in and check-out blank until the initial api sync completes',
@@ -474,6 +473,10 @@ void main() {
 
       expect(controller.state.lastCheckIn, isNull);
       expect(controller.state.lastCheckOut, isNull);
+      expect(
+        controller.state.statusMessage,
+        'Atualização em andamento. Aguarde.',
+      );
 
       apiService.completeFetchState(
         MobileStateResponse(
@@ -805,6 +808,222 @@ void main() {
     },
   );
 
+  test('captured location uses user-facing labels for special cases', () {
+    final checkoutLocation = ManagedLocation(
+      id: 32,
+      local: 'Zona de CheckOut 3',
+      latitude: 1,
+      longitude: 1,
+      toleranceMeters: 200,
+      updatedAt: DateTime(2026, 4, 10),
+    );
+
+    expect(
+      CheckingController.resolveCapturedLocationLabel(
+        location: null,
+        nearestWorkplaceDistanceMeters: 2500,
+      ),
+      'Fora do Ambiente de Trabalho',
+    );
+    expect(
+      CheckingController.resolveCapturedLocationLabel(
+        location: checkoutLocation,
+      ),
+      'Zona de Check-Out',
+    );
+  });
+
+  test(
+    'captured location stays blank when outside no range but still within 2 km',
+    () {
+      expect(
+        CheckingController.resolveCapturedLocationLabel(
+          location: null,
+          nearestWorkplaceDistanceMeters: 1500,
+        ),
+        isNull,
+      );
+      expect(
+        CheckingController.resolveCapturedLocationLabel(location: null),
+        isNull,
+      );
+    },
+  );
+
+  test(
+    'scenario 1 keeps the user outside the workplace without automatic action',
+    () {
+      final managedLocations = _buildForegroundScenarioLocations();
+      final matchResult = CheckingLocationLogic.resolveLocationMatch(
+        managedLocations: managedLocations,
+        latitude: 1.322615,
+        longitude: 103.663611,
+      );
+
+      expect(matchResult.matchedLocation, isNull);
+      expect(
+        matchResult.nearestWorkplaceDistanceMeters,
+        greaterThan(CheckingController.outOfRangeCheckoutDistanceMeters),
+      );
+      expect(
+        CheckingController.resolveCapturedLocationLabel(
+          location: matchResult.matchedLocation,
+          nearestWorkplaceDistanceMeters:
+              matchResult.nearestWorkplaceDistanceMeters,
+        ),
+        'Fora do Ambiente de Trabalho',
+      );
+      expect(
+        CheckingController.resolveAutomaticActionOutOfRange(
+          remoteState: _buildScenarioRemoteState(
+            lastAction: RegistroType.checkOut,
+          ),
+          nearestDistanceMeters: matchResult.nearestWorkplaceDistanceMeters,
+          autoCheckOutEnabled: true,
+        ),
+        isNull,
+      );
+    },
+  );
+
+  test(
+    'scenario 2 captures Escritório Principal and performs automatic check-in',
+    () {
+      final managedLocations = _buildForegroundScenarioLocations();
+      final matchResult = CheckingLocationLogic.resolveLocationMatch(
+        managedLocations: managedLocations,
+        latitude: 1.249494,
+        longitude: 103.614345,
+      );
+      final matchedLocation = matchResult.matchedLocation;
+
+      expect(matchedLocation?.local, 'Escritório Principal');
+      expect(
+        CheckingController.resolveCapturedLocationLabel(
+          location: matchedLocation,
+        ),
+        'Escritório Principal',
+      );
+      expect(
+        CheckingController.resolveAutomaticActionForLocation(
+          remoteState: _buildScenarioRemoteState(
+            lastAction: RegistroType.checkOut,
+          ),
+          location: matchedLocation!,
+          autoCheckInEnabled: true,
+          autoCheckOutEnabled: true,
+          lastCheckInLocation: null,
+        ),
+        RegistroType.checkIn,
+      );
+    },
+  );
+
+  test(
+    'scenario 3 captures Zona de Check-Out and performs automatic check-out after a prior check-in',
+    () {
+      final managedLocations = _buildForegroundScenarioLocations();
+      final matchResult = CheckingLocationLogic.resolveLocationMatch(
+        managedLocations: managedLocations,
+        latitude: 1.266058,
+        longitude: 103.614415,
+      );
+      final matchedLocation = matchResult.matchedLocation;
+
+      expect(matchedLocation?.isCheckoutZone, isTrue);
+      expect(
+        CheckingController.resolveCapturedLocationLabel(
+          location: matchedLocation,
+        ),
+        'Zona de Check-Out',
+      );
+      expect(
+        CheckingController.resolveAutomaticActionForLocation(
+          remoteState: _buildScenarioRemoteState(
+            lastAction: RegistroType.checkIn,
+            currentLocal: 'Escritório Principal',
+          ),
+          location: matchedLocation!,
+          autoCheckInEnabled: true,
+          autoCheckOutEnabled: true,
+          lastCheckInLocation: 'Escritório Principal',
+        ),
+        RegistroType.checkOut,
+      );
+    },
+  );
+
+  test(
+    'scenario 4 captures Em Deslocamento and performs a new automatic check-in to update the server location',
+    () {
+      final managedLocations = _buildForegroundScenarioLocations();
+      final matchResult = CheckingLocationLogic.resolveLocationMatch(
+        managedLocations: managedLocations,
+        latitude: 1.251290,
+        longitude: 103.613386,
+      );
+      final matchedLocation = matchResult.matchedLocation;
+
+      expect(matchedLocation?.local, 'Em Deslocamento');
+      expect(
+        CheckingController.resolveCapturedLocationLabel(
+          location: matchedLocation,
+        ),
+        'Em Deslocamento',
+      );
+      expect(
+        CheckingController.resolveAutomaticActionForLocation(
+          remoteState: _buildScenarioRemoteState(
+            lastAction: RegistroType.checkIn,
+            currentLocal: 'Escritório Principal',
+          ),
+          location: matchedLocation!,
+          autoCheckInEnabled: true,
+          autoCheckOutEnabled: true,
+          lastCheckInLocation: 'Escritório Principal',
+        ),
+        RegistroType.checkIn,
+      );
+    },
+  );
+
+  test(
+    'scenario 5 captures outside workplace and performs automatic check-out beyond 2 km from any work area',
+    () {
+      final managedLocations = _buildForegroundScenarioLocations();
+      final matchResult = CheckingLocationLogic.resolveLocationMatch(
+        managedLocations: managedLocations,
+        latitude: 1.328550,
+        longitude: 103.708420,
+      );
+
+      expect(matchResult.matchedLocation, isNull);
+      expect(
+        matchResult.nearestWorkplaceDistanceMeters,
+        greaterThan(CheckingController.outOfRangeCheckoutDistanceMeters),
+      );
+      expect(
+        CheckingController.resolveCapturedLocationLabel(
+          location: matchResult.matchedLocation,
+          nearestWorkplaceDistanceMeters:
+              matchResult.nearestWorkplaceDistanceMeters,
+        ),
+        'Fora do Ambiente de Trabalho',
+      );
+      expect(
+        CheckingController.resolveAutomaticActionOutOfRange(
+          remoteState: _buildScenarioRemoteState(
+            lastAction: RegistroType.checkIn,
+            currentLocal: 'Escritório Principal',
+          ),
+          nearestDistanceMeters: matchResult.nearestWorkplaceDistanceMeters,
+          autoCheckOutEnabled: true,
+        ),
+        RegistroType.checkOut,
+      );
+    },
+  );
+
   test('automatic checkout out of range uses Fora do Local de Trabalho', () {
     final resolvedLocal = CheckingController.resolveAutomaticEventLocal(
       action: RegistroType.checkOut,
@@ -1053,6 +1272,68 @@ class _DelayedFakeCheckingStorageService extends CheckingStorageService {
       await Future<void>.delayed(const Duration(milliseconds: 25));
     }
     savedStates.add(state);
+  }
+}
+
+List<ManagedLocation> _buildForegroundScenarioLocations() {
+  final updatedAt = DateTime(2026, 4, 15, 7, 0);
+  return <ManagedLocation>[
+    ManagedLocation(
+      id: 200,
+      local: 'Escritório Principal',
+      latitude: 1.249494,
+      longitude: 103.614345,
+      toleranceMeters: 150,
+      updatedAt: updatedAt,
+    ),
+    ManagedLocation(
+      id: 201,
+      local: 'Em Deslocamento',
+      latitude: 1.25129,
+      longitude: 103.613386,
+      toleranceMeters: 150,
+      updatedAt: updatedAt,
+    ),
+    ManagedLocation(
+      id: 202,
+      local: 'Zona de CheckOut',
+      latitude: 1.266058,
+      longitude: 103.614415,
+      toleranceMeters: 150,
+      updatedAt: updatedAt,
+    ),
+  ];
+}
+
+MobileStateResponse _buildScenarioRemoteState({
+  required RegistroType lastAction,
+  String? currentLocal,
+}) {
+  switch (lastAction) {
+    case RegistroType.checkIn:
+      return MobileStateResponse(
+        found: true,
+        chave: 'HR70',
+        nome: 'Usuário Teste',
+        projeto: 'P80',
+        currentAction: 'checkin',
+        currentEventTime: DateTime(2026, 4, 14, 18),
+        currentLocal: currentLocal,
+        lastCheckInAt: DateTime(2026, 4, 14, 18),
+        lastCheckOutAt: DateTime(2026, 4, 13, 18),
+      );
+    case RegistroType.checkOut:
+      return MobileStateResponse(
+        found: true,
+        chave: 'HR70',
+        nome: 'Usuário Teste',
+        projeto: 'P80',
+        currentAction: 'checkout',
+        currentEventTime: DateTime(2026, 4, 14, 18),
+        currentLocal: currentLocal,
+        lastCheckInAt: DateTime(2026, 4, 14, 7),
+        lastCheckOutAt: DateTime(2026, 4, 14, 18),
+      );
   }
 }
 

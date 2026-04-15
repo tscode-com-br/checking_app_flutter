@@ -19,6 +19,9 @@ class CheckingLocationLogic {
   static const double outOfRangeCheckoutDistanceMeters = 2000;
   static const double defaultLocationAccuracyThresholdMeters = 30;
   static const String automaticCheckoutLocation = 'Fora do Local de Trabalho';
+  static const String outsideWorkplaceCapturedLocation =
+      'Fora do Ambiente de Trabalho';
+  static const String checkoutZoneCapturedLocation = 'Zona de Check-Out';
   static const Duration singaporeUtcOffset = Duration(hours: 8);
   static const int daytimeLocationUpdateIntervalSeconds = 15 * 60;
   static const int overnightLocationUpdateIntervalSeconds = 60 * 60;
@@ -237,6 +240,23 @@ class CheckingLocationLogic {
     }
 
     return location?.local ?? automaticCheckoutLocation;
+  }
+
+  static String? resolveCapturedLocationLabel({
+    ManagedLocation? location,
+    double? nearestWorkplaceDistanceMeters,
+  }) {
+    if (location == null) {
+      if (nearestWorkplaceDistanceMeters != null &&
+          nearestWorkplaceDistanceMeters > outOfRangeCheckoutDistanceMeters) {
+        return outsideWorkplaceCapturedLocation;
+      }
+      return null;
+    }
+    if (location.isCheckoutZone) {
+      return checkoutZoneCapturedLocation;
+    }
+    return location.local;
   }
 
   static bool isLocationAccuracyPreciseEnough(
