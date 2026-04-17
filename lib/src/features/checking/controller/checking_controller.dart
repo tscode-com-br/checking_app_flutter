@@ -456,6 +456,38 @@ class CheckingController extends ChangeNotifier {
     await _applySettingsState(_state.copyWith(nightUpdatesDisabled: value));
   }
 
+  Future<void> setNightModeAfterCheckoutEnabled(bool value) async {
+    if (value == _state.nightModeAfterCheckoutEnabled) {
+      return;
+    }
+
+    final baseState = _state.copyWith(nightModeAfterCheckoutEnabled: value);
+    final nextState = baseState.copyWith(
+      nightModeAfterCheckoutUntil:
+          CheckingLocationLogic.resolveNightModeAfterCheckoutUntilForAction(
+            currentState: baseState,
+            effectiveLastAction: baseState.lastRecordedAction,
+            lastCheckOut: baseState.lastCheckOut,
+          ),
+    );
+    await _applySettingsState(nextState);
+
+    if (CheckingLocationLogic.isNightModeAfterCheckoutActive(state: _state)) {
+      _setStatus(
+        CheckingLocationLogic.postCheckoutNightModeStatusMessage,
+        StatusTone.warning,
+      );
+      return;
+    }
+
+    _setStatus(
+      value
+          ? 'Modo noturno após check-out ativado.'
+          : 'Modo noturno após check-out desativado.',
+      value ? StatusTone.success : StatusTone.warning,
+    );
+  }
+
   Future<void> setNightPeriodStartMinutes(int minutes) async {
     final normalizedMinutes = CheckingLocationLogic.normalizeMinutesOfDay(
       minutes,
@@ -635,20 +667,6 @@ class CheckingController extends ChangeNotifier {
     }
 
     _foregroundRefreshInProgress = true;
-    _hasHydratedHistoryForCurrentKey = false;
-    _setState(
-      _state.copyWith(
-        lastMatchedLocation: null,
-        lastDetectedLocation: null,
-        lastLocationUpdateAt: null,
-        lastCheckInLocation: null,
-        lastCheckIn: null,
-        lastCheckOut: null,
-        statusMessage: 'Atualização em andamento. Aguarde.',
-        statusTone: StatusTone.warning,
-        isLoading: false,
-      ),
-    );
 
     try {
       if (_state.locationSharingEnabled) {
@@ -660,6 +678,42 @@ class CheckingController extends ChangeNotifier {
         updateStatus: false,
       );
       await refreshPermissionSettings();
+
+      final resolvedState = _resolveLocationUpdateIntervalState(_state);
+      if (resolvedState.locationUpdateIntervalSeconds !=
+              _state.locationUpdateIntervalSeconds ||
+          resolvedState.nightPeriodStartMinutes !=
+              _state.nightPeriodStartMinutes ||
+          resolvedState.nightPeriodEndMinutes != _state.nightPeriodEndMinutes ||
+          resolvedState.nightModeAfterCheckoutUntil !=
+              _state.nightModeAfterCheckoutUntil) {
+        _updateAndPersist(resolvedState, syncAutomation: false);
+      }
+
+      if (CheckingLocationLogic.isNightModeAfterCheckoutActive(state: _state)) {
+        _stopHistoryAutoRefresh();
+        await _suspendLocationActivityWhileNightModeAfterCheckoutIsActive();
+        _setStatus(
+          CheckingLocationLogic.postCheckoutNightModeStatusMessage,
+          StatusTone.warning,
+        );
+        return;
+      }
+
+      _hasHydratedHistoryForCurrentKey = false;
+      _setState(
+        _state.copyWith(
+          lastMatchedLocation: null,
+          lastDetectedLocation: null,
+          lastLocationUpdateAt: null,
+          lastCheckInLocation: null,
+          lastCheckIn: null,
+          lastCheckOut: null,
+          statusMessage: 'Atualização em andamento. Aguarde.',
+          statusTone: StatusTone.warning,
+          isLoading: false,
+        ),
+      );
 
       if (!_state.hasValidChave || !_state.hasApiConfig) {
         _stopHistoryAutoRefresh();
@@ -706,6 +760,16 @@ class CheckingController extends ChangeNotifier {
     bool silent = false,
     bool updateStatus = true,
   }) async {
+    if (CheckingLocationLogic.isNightModeAfterCheckoutActive(state: _state)) {
+      if (updateStatus) {
+        _setStatus(
+          CheckingLocationLogic.postCheckoutNightModeStatusMessage,
+          StatusTone.warning,
+        );
+      }
+      return CheckingLocationLogic.postCheckoutNightModeStatusMessage;
+    }
+
     if (!_state.hasValidChave) {
       _clearHistoryFields(updateStatus: updateStatus);
       return _state.statusMessage;
@@ -851,6 +915,16 @@ class CheckingController extends ChangeNotifier {
     required String source,
     String? local,
   }) async {
+    if (CheckingLocationLogic.isNightModeAfterCheckoutActive(state: _state)) {
+      _setStatus(
+        CheckingLocationLogic.postCheckoutNightModeStatusMessage,
+        StatusTone.warning,
+      );
+      throw const CheckingApiException(
+        CheckingLocationLogic.postCheckoutNightModeStatusMessage,
+      );
+    }
+
     if (!_state.hasValidChave) {
       throw const CheckingApiException(
         'Informe uma chave Petrobras com 4 caracteres.',
@@ -890,8 +964,15 @@ class CheckingController extends ChangeNotifier {
         recentAction: registro,
         recentLocal: local,
       );
+      _restartLocationUpdateIntervalBoundaryTimer();
+      if (CheckingLocationLogic.isNightModeAfterCheckoutActive(state: _state)) {
+        _setStatus(
+          CheckingLocationLogic.postCheckoutNightModeStatusMessage,
+          StatusTone.warning,
+        );
+      }
       if (shouldRefreshLocationTrackingAfterSubmit(state: _state)) {
-        unawaited(_refreshBackgroundLocationService());
+        unawaited(_restartLocationTracking(captureImmediately: false));
       }
       return response.message;
     } catch (error) {
@@ -924,7 +1005,8 @@ class CheckingController extends ChangeNotifier {
   static bool shouldRefreshLocationTrackingAfterSubmit({
     required CheckingState state,
   }) {
-    return state.locationSharingEnabled && state.hasAnyLocationAutomation;
+    return state.locationSharingEnabled &&
+        (state.hasAnyLocationAutomation || state.nightModeAfterCheckoutEnabled);
   }
 
   @visibleForTesting
@@ -1023,6 +1105,28 @@ class CheckingController extends ChangeNotifier {
     return state.locationSharingEnabled &&
         !state.isLocationUpdating &&
         !state.isAutomaticCheckingUpdating;
+  }
+
+  @visibleForTesting
+  static bool isNightModeAfterCheckoutActive({
+    required CheckingState state,
+    DateTime? referenceTime,
+  }) {
+    return CheckingLocationLogic.isNightModeAfterCheckoutActive(
+      state: state,
+      referenceTime: referenceTime,
+    );
+  }
+
+  static bool isRegisterActionInteractive({
+    required CheckingState state,
+    DateTime? referenceTime,
+  }) {
+    return !state.isSubmitting &&
+        !CheckingLocationLogic.isNightModeAfterCheckoutActive(
+          state: state,
+          referenceTime: referenceTime,
+        );
   }
 
   @visibleForTesting
@@ -1228,7 +1332,12 @@ class CheckingController extends ChangeNotifier {
   }
 
   Future<void> _startLocationTracking({bool captureImmediately = true}) async {
-    if (_shouldRunBackgroundLocationService(_state)) {
+    if (CheckingLocationLogic.isNightModeAfterCheckoutActive(state: _state)) {
+      await _suspendLocationActivityWhileNightModeAfterCheckoutIsActive();
+      return;
+    }
+
+    if (CheckingBackgroundLocationService.shouldRunForState(_state)) {
       _stopLocationCaptureTimer();
       await _positionSubscription?.cancel();
       _positionSubscription = null;
@@ -1277,9 +1386,14 @@ class CheckingController extends ChangeNotifier {
       return;
     }
 
+    if (CheckingLocationLogic.isNightModeAfterCheckoutActive(state: _state)) {
+      await _suspendLocationActivityWhileNightModeAfterCheckoutIsActive();
+      return;
+    }
+
     await _captureCurrentPositionNow();
 
-    if (_shouldRunBackgroundLocationService(_state)) {
+    if (CheckingBackgroundLocationService.shouldRunForState(_state)) {
       _stopLocationCaptureTimer();
       await _positionSubscription?.cancel();
       _positionSubscription = null;
@@ -1297,7 +1411,8 @@ class CheckingController extends ChangeNotifier {
   }
 
   Future<void> _captureCurrentPositionNow() async {
-    if (!_state.locationSharingEnabled) {
+    if (!_state.locationSharingEnabled ||
+        CheckingLocationLogic.isNightModeAfterCheckoutActive(state: _state)) {
       return;
     }
 
@@ -1371,7 +1486,9 @@ class CheckingController extends ChangeNotifier {
   }
 
   Future<void> _handlePositionUpdate(Position position) async {
-    if (_processingLocationUpdate || !_state.locationSharingEnabled) {
+    if (_processingLocationUpdate ||
+        !_state.locationSharingEnabled ||
+        CheckingLocationLogic.isNightModeAfterCheckoutActive(state: _state)) {
       return;
     }
     if (!isLocationAccuracyPreciseEnough(
@@ -1475,6 +1592,7 @@ class CheckingController extends ChangeNotifier {
 
   Future<bool> _applyAutomationFromLastKnownLocationIfNeeded() async {
     if (!_state.locationSharingEnabled ||
+        CheckingLocationLogic.isNightModeAfterCheckoutActive(state: _state) ||
         !_state.hasAnyLocationAutomation ||
         !_state.hasValidChave ||
         !_state.hasApiConfig ||
@@ -1892,6 +2010,55 @@ class CheckingController extends ChangeNotifier {
     }
   }
 
+  Future<void>
+  _suspendLocationActivityWhileNightModeAfterCheckoutIsActive() async {
+    _stopLocationCaptureTimer();
+    await _positionSubscription?.cancel();
+    _positionSubscription = null;
+    _restartLocationUpdateIntervalBoundaryTimer();
+
+    if (CheckingBackgroundLocationService.shouldRunForState(_state)) {
+      await _refreshBackgroundLocationService();
+      return;
+    }
+
+    if (CheckingBackgroundLocationService.isSupported) {
+      await CheckingBackgroundLocationService.stop();
+    }
+  }
+
+  Future<void> _handleLocationActivityBoundaryReached() async {
+    final resolvedState = _resolveLocationUpdateIntervalState(_state);
+    final stateChanged =
+        resolvedState.locationUpdateIntervalSeconds !=
+            _state.locationUpdateIntervalSeconds ||
+        resolvedState.nightPeriodStartMinutes !=
+            _state.nightPeriodStartMinutes ||
+        resolvedState.nightPeriodEndMinutes != _state.nightPeriodEndMinutes ||
+        resolvedState.nightModeAfterCheckoutUntil !=
+            _state.nightModeAfterCheckoutUntil;
+
+    if (stateChanged) {
+      _updateAndPersist(resolvedState, syncAutomation: false);
+      await flushStatePersistence();
+    }
+
+    _restartLocationUpdateIntervalBoundaryTimer();
+
+    if (CheckingLocationLogic.isNightModeAfterCheckoutActive(state: _state)) {
+      return;
+    }
+
+    if (_state.hasValidChave && _state.hasApiConfig) {
+      _restartHistoryAutoRefresh();
+      unawaited(syncHistory(silent: true, updateStatus: false));
+    }
+
+    if (_state.locationSharingEnabled) {
+      await _restartLocationTracking(captureImmediately: false);
+    }
+  }
+
   Future<void> _refreshPermissionDerivedState() async {
     await _refreshLocationSharingAvailability(
       interactive: false,
@@ -1909,13 +2076,16 @@ class CheckingController extends ChangeNotifier {
 
   void _restartHistoryAutoRefresh() {
     _stopHistoryAutoRefresh();
-    if (!_state.hasValidChave || !_state.hasApiConfig) {
+    if (!_state.hasValidChave ||
+        !_state.hasApiConfig ||
+        CheckingLocationLogic.isNightModeAfterCheckoutActive(state: _state)) {
       return;
     }
 
     _historyRefreshTimer = Timer.periodic(_historyRefreshInterval, (_) {
       if (!_state.hasValidChave ||
           !_state.hasApiConfig ||
+          CheckingLocationLogic.isNightModeAfterCheckoutActive(state: _state) ||
           _state.isSubmitting ||
           _foregroundRefreshInProgress ||
           _state.isSyncing) {
@@ -1935,7 +2105,7 @@ class CheckingController extends ChangeNotifier {
     _locationUpdateIntervalTimer = Timer(
       _delayUntilNextLocationUpdateIntervalBoundary(),
       () {
-        unawaited(refreshLocationUpdateInterval());
+        unawaited(_handleLocationActivityBoundaryReached());
       },
     );
   }
@@ -1963,7 +2133,7 @@ class CheckingController extends ChangeNotifier {
       enabled: _state.oemBackgroundSetupEnabled,
     );
 
-    if (!_shouldRunBackgroundLocationService(_state)) {
+    if (!CheckingBackgroundLocationService.shouldRunForState(_state)) {
       await CheckingBackgroundLocationService.stop();
       return;
     }
@@ -2025,6 +2195,8 @@ class CheckingController extends ChangeNotifier {
         registro: snapshot.registro,
         checkInProjeto: snapshot.checkInProjeto,
         locationSharingEnabled: nextLocationSharingEnabled,
+        nightModeAfterCheckoutEnabled: snapshot.nightModeAfterCheckoutEnabled,
+        nightModeAfterCheckoutUntil: snapshot.nightModeAfterCheckoutUntil,
         autoCheckInEnabled: resolveControlFlagAfterSnapshot(
           currentValue: _state.autoCheckInEnabled,
           snapshotLocationSharingEnabled: snapshot.locationSharingEnabled,

@@ -25,12 +25,16 @@ class CheckingLocationLogic {
   static const int defaultLocationUpdateIntervalSeconds = 15 * 60;
   static const int defaultNightPeriodStartMinutes = 22 * 60;
   static const int defaultNightPeriodEndMinutes = 6 * 60;
+  static const Duration singaporeUtcOffset = Duration(hours: 8);
+  static const int postCheckoutNightModeResumeMinutes = 6 * 60;
   static const String automaticCheckoutLocation = 'Fora do Local de Trabalho';
   static const String outsideWorkplaceCapturedLocation =
       'Fora do Ambiente de Trabalho';
   static const String checkoutZoneCapturedLocation = 'Zona de Check-Out';
   static const String uncatalogedCapturedLocation =
       'Localização não Cadastrada';
+  static const String postCheckoutNightModeStatusMessage =
+      'Modo noturno após check-out ativo até 06:00 do dia seguinte, no horário de Singapura.';
 
   static int resolveLocationUpdateIntervalSeconds({
     int? configuredIntervalSeconds,
@@ -68,9 +72,16 @@ class CheckingLocationLogic {
       state.nightPeriodEndMinutes,
       fallbackMinutes: defaultNightPeriodEndMinutes,
     );
+    final normalizedNightModeAfterCheckoutUntil =
+        normalizeNightModeAfterCheckoutUntil(
+          state: state,
+          referenceTime: referenceTime,
+        );
     if (resolvedIntervalSeconds == state.locationUpdateIntervalSeconds &&
         normalizedNightPeriodStartMinutes == state.nightPeriodStartMinutes &&
-        normalizedNightPeriodEndMinutes == state.nightPeriodEndMinutes) {
+        normalizedNightPeriodEndMinutes == state.nightPeriodEndMinutes &&
+        normalizedNightModeAfterCheckoutUntil ==
+            state.nightModeAfterCheckoutUntil) {
       return state;
     }
 
@@ -78,6 +89,7 @@ class CheckingLocationLogic {
       locationUpdateIntervalSeconds: resolvedIntervalSeconds,
       nightPeriodStartMinutes: normalizedNightPeriodStartMinutes,
       nightPeriodEndMinutes: normalizedNightPeriodEndMinutes,
+      nightModeAfterCheckoutUntil: normalizedNightModeAfterCheckoutUntil,
     );
   }
 
@@ -85,6 +97,24 @@ class CheckingLocationLogic {
     required CheckingState state,
     DateTime? referenceTime,
   }) {
+    final normalizedNightModeAfterCheckoutUntil =
+        normalizeNightModeAfterCheckoutUntil(
+          state: state,
+          referenceTime: referenceTime,
+        );
+    if (normalizedNightModeAfterCheckoutUntil != null) {
+      final now = referenceTime ?? DateTime.now();
+      final delay = normalizedNightModeAfterCheckoutUntil.difference(now);
+      if (delay <= Duration.zero) {
+        return const Duration(minutes: 1);
+      }
+      return delay;
+    }
+
+    if (state.nightModeAfterCheckoutEnabled) {
+      return const Duration(days: 1);
+    }
+
     if (!state.nightUpdatesDisabled ||
         state.nightPeriodStartMinutes == state.nightPeriodEndMinutes) {
       return const Duration(days: 1);
@@ -128,6 +158,10 @@ class CheckingLocationLogic {
     required CheckingState state,
     DateTime? referenceTime,
   }) {
+    if (state.nightModeAfterCheckoutEnabled) {
+      return false;
+    }
+
     if (!state.nightUpdatesDisabled ||
         state.nightPeriodStartMinutes == state.nightPeriodEndMinutes) {
       return false;
@@ -196,7 +230,96 @@ class CheckingLocationLogic {
     required CheckingState state,
     DateTime? referenceTime,
   }) {
+    if (isNightModeAfterCheckoutActive(
+      state: state,
+      referenceTime: referenceTime,
+    )) {
+      return false;
+    }
+
+    if (state.nightModeAfterCheckoutEnabled) {
+      return true;
+    }
+
     return !isNightPeriodActive(state: state, referenceTime: referenceTime);
+  }
+
+  static DateTime resolveNightModeAfterCheckoutUntil({
+    required DateTime checkoutTime,
+  }) {
+    final checkoutTimeInSingapore = checkoutTime.toUtc().add(
+      singaporeUtcOffset,
+    );
+    final nextDayAtSixInSingapore = DateTime.utc(
+      checkoutTimeInSingapore.year,
+      checkoutTimeInSingapore.month,
+      checkoutTimeInSingapore.day,
+    ).add(const Duration(days: 1, hours: 6));
+    return nextDayAtSixInSingapore.subtract(singaporeUtcOffset).toLocal();
+  }
+
+  static DateTime? normalizeNightModeAfterCheckoutUntil({
+    required CheckingState state,
+    DateTime? referenceTime,
+  }) {
+    if (!state.nightModeAfterCheckoutEnabled) {
+      return null;
+    }
+
+    final nightModeAfterCheckoutUntil = state.nightModeAfterCheckoutUntil;
+    if (nightModeAfterCheckoutUntil == null) {
+      return null;
+    }
+
+    final now = referenceTime ?? DateTime.now();
+    if (!nightModeAfterCheckoutUntil.isAfter(now)) {
+      return null;
+    }
+    return nightModeAfterCheckoutUntil;
+  }
+
+  static bool isNightModeAfterCheckoutActive({
+    required CheckingState state,
+    DateTime? referenceTime,
+  }) {
+    return normalizeNightModeAfterCheckoutUntil(
+          state: state,
+          referenceTime: referenceTime,
+        ) !=
+        null;
+  }
+
+  static DateTime? resolveNightModeAfterCheckoutUntilForAction({
+    required CheckingState currentState,
+    required RegistroType? effectiveLastAction,
+    required DateTime? lastCheckOut,
+    DateTime? referenceTime,
+  }) {
+    if (!currentState.nightModeAfterCheckoutEnabled) {
+      return null;
+    }
+
+    final now = referenceTime ?? DateTime.now();
+    if (effectiveLastAction == RegistroType.checkOut && lastCheckOut != null) {
+      final nightModeAfterCheckoutUntil = resolveNightModeAfterCheckoutUntil(
+        checkoutTime: lastCheckOut,
+      );
+      return nightModeAfterCheckoutUntil.isAfter(now)
+          ? nightModeAfterCheckoutUntil
+          : null;
+    }
+
+    if (effectiveLastAction == RegistroType.checkIn) {
+      return null;
+    }
+
+    final existingNightModeAfterCheckoutUntil =
+        currentState.nightModeAfterCheckoutUntil;
+    if (existingNightModeAfterCheckoutUntil == null ||
+        !existingNightModeAfterCheckoutUntil.isAfter(now)) {
+      return null;
+    }
+    return existingNightModeAfterCheckoutUntil;
   }
 
   static double resolveDistanceToLocation({
@@ -518,11 +641,18 @@ class CheckingLocationLogic {
     } else if (remoteLastRecordedAction == RegistroType.checkOut) {
       nextLastCheckInLocation = null;
     }
+    final nextNightModeAfterCheckoutUntil =
+        resolveNightModeAfterCheckoutUntilForAction(
+          currentState: currentState,
+          effectiveLastAction: recentAction ?? remoteLastRecordedAction,
+          lastCheckOut: response.lastCheckOutAt,
+        );
 
     return currentState.copyWith(
       lastCheckIn: response.lastCheckInAt,
       lastCheckOut: response.lastCheckOutAt,
       lastCheckInLocation: nextLastCheckInLocation,
+      nightModeAfterCheckoutUntil: nextNightModeAfterCheckoutUntil,
       registro: suggestedRegistro,
       checkInProjeto: resolveProjeto(response.projeto) ?? currentState.projeto,
       statusMessage: updateStatus ? statusMessage : currentState.statusMessage,

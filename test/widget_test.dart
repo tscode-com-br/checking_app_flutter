@@ -71,6 +71,8 @@ void main() {
       'nightUpdatesDisabled': true,
       'nightPeriodStartMinutes': 23 * 60,
       'nightPeriodEndMinutes': 5 * 60,
+      'nightModeAfterCheckoutEnabled': true,
+      'nightModeAfterCheckoutUntil': '2026-04-17T22:00:00.000Z',
       'oemBackgroundSetupEnabled': true,
     });
 
@@ -78,6 +80,11 @@ void main() {
     expect(restored.nightUpdatesDisabled, isTrue);
     expect(restored.nightPeriodStartMinutes, 23 * 60);
     expect(restored.nightPeriodEndMinutes, 5 * 60);
+    expect(restored.nightModeAfterCheckoutEnabled, isTrue);
+    expect(
+      restored.nightModeAfterCheckoutUntil?.toUtc().toIso8601String(),
+      '2026-04-17T22:00:00.000Z',
+    );
     expect(restored.oemBackgroundSetupEnabled, isTrue);
   });
 
@@ -624,6 +631,56 @@ void main() {
     );
   });
 
+  test('computes the next 06:00 Singapore resume time after checkout', () {
+    final resumeAt = CheckingLocationLogic.resolveNightModeAfterCheckoutUntil(
+      checkoutTime: DateTime.utc(2026, 4, 17, 11, 30),
+    );
+
+    expect(resumeAt.toUtc().toIso8601String(), '2026-04-17T22:00:00.000Z');
+  });
+
+  test(
+    'post-checkout night mode pauses all activity until the next 06:00 Singapore time',
+    () {
+      final state = CheckingState.initial().copyWith(
+        nightModeAfterCheckoutEnabled: true,
+        nightModeAfterCheckoutUntil: DateTime.utc(2026, 4, 17, 22).toLocal(),
+      );
+
+      expect(
+        CheckingLocationLogic.shouldRunBackgroundActivityNow(
+          state: state,
+          referenceTime: DateTime.utc(2026, 4, 17, 21, 59).toLocal(),
+        ),
+        isFalse,
+      );
+      expect(
+        CheckingLocationLogic.shouldRunBackgroundActivityNow(
+          state: state,
+          referenceTime: DateTime.utc(2026, 4, 17, 22, 1).toLocal(),
+        ),
+        isTrue,
+      );
+    },
+  );
+
+  test('post-checkout night mode suppresses the configurable night window', () {
+    final state = CheckingState.initial().copyWith(
+      nightUpdatesDisabled: true,
+      nightPeriodStartMinutes: 22 * 60,
+      nightPeriodEndMinutes: 6 * 60,
+      nightModeAfterCheckoutEnabled: true,
+    );
+
+    expect(
+      CheckingLocationLogic.shouldRunBackgroundActivityNow(
+        state: state,
+        referenceTime: DateTime(2026, 4, 20, 23, 30),
+      ),
+      isTrue,
+    );
+  });
+
   test('keeps background tracking active after task removal', () {
     expect(CheckingBackgroundLocationService.stopServiceOnTaskRemoval, isFalse);
     expect(CheckingBackgroundLocationService.allowAutomaticRestart, isTrue);
@@ -793,6 +850,7 @@ void main() {
       expect(screenSource, contains("label: 'Permitir Notificações:'"));
       expect(screenSource, contains("label: 'Sem Restrições de Bateria:'"));
       expect(screenSource, contains("label: 'Ativar Auto-Start:'"));
+      expect(screenSource, contains("label: 'Modo Noturno Após Check-out:'"));
       expect(
         screenSource,
         contains("label: 'Check-in/Check-out Automáticos:'"),
@@ -1035,6 +1093,50 @@ void main() {
       isTrue,
     );
   });
+
+  test(
+    'manual submit refreshes location tracking when post-checkout night mode is enabled',
+    () {
+      final state = CheckingState.initial().copyWith(
+        locationSharingEnabled: true,
+        autoCheckInEnabled: false,
+        autoCheckOutEnabled: false,
+        nightModeAfterCheckoutEnabled: true,
+      );
+
+      expect(
+        CheckingController.shouldRefreshLocationTrackingAfterSubmit(
+          state: state,
+        ),
+        isTrue,
+      );
+    },
+  );
+
+  test(
+    'register action is disabled while the post-checkout idle window is active',
+    () {
+      final state = CheckingState.initial().copyWith(
+        nightModeAfterCheckoutEnabled: true,
+        nightModeAfterCheckoutUntil: DateTime.utc(2026, 4, 17, 22).toLocal(),
+      );
+
+      expect(
+        CheckingController.isRegisterActionInteractive(
+          state: state,
+          referenceTime: DateTime.utc(2026, 4, 17, 21, 0).toLocal(),
+        ),
+        isFalse,
+      );
+      expect(
+        CheckingController.isRegisterActionInteractive(
+          state: state,
+          referenceTime: DateTime.utc(2026, 4, 17, 22, 1).toLocal(),
+        ),
+        isTrue,
+      );
+    },
+  );
 
   test(
     'background snapshot cannot re-enable a toggle that the user turned off',

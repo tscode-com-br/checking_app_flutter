@@ -30,6 +30,8 @@ class CheckingBackgroundLocationSnapshot {
     required this.chave,
     required this.registro,
     required this.checkInProjeto,
+    required this.nightModeAfterCheckoutEnabled,
+    required this.nightModeAfterCheckoutUntil,
     required this.locationSharingEnabled,
     required this.autoCheckInEnabled,
     required this.autoCheckOutEnabled,
@@ -65,6 +67,11 @@ class CheckingBackgroundLocationSnapshot {
         (value) => value.name == projetoName,
         orElse: () => ProjetoType.p80,
       ),
+      nightModeAfterCheckoutEnabled:
+          map['nightModeAfterCheckoutEnabled'] as bool? ?? false,
+      nightModeAfterCheckoutUntil: _readNullableDateTime(
+        map['nightModeAfterCheckoutUntil'] as num?,
+      ),
       locationSharingEnabled: map['locationSharingEnabled'] as bool? ?? false,
       autoCheckInEnabled: map['autoCheckInEnabled'] as bool? ?? false,
       autoCheckOutEnabled: map['autoCheckOutEnabled'] as bool? ?? false,
@@ -95,6 +102,8 @@ class CheckingBackgroundLocationSnapshot {
   final String chave;
   final RegistroType registro;
   final ProjetoType checkInProjeto;
+  final bool nightModeAfterCheckoutEnabled;
+  final DateTime? nightModeAfterCheckoutUntil;
   final bool locationSharingEnabled;
   final bool autoCheckInEnabled;
   final bool autoCheckOutEnabled;
@@ -531,7 +540,9 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
     if (!CheckingLocationLogic.shouldRunBackgroundActivityNow(state: state)) {
       final pausedState = state.copyWith(
         statusMessage:
-            'Atualizações em segundo plano pausadas no período noturno configurado.',
+            CheckingLocationLogic.isNightModeAfterCheckoutActive(state: state)
+            ? CheckingLocationLogic.postCheckoutNightModeStatusMessage
+            : 'Atualizações em segundo plano pausadas no período noturno configurado.',
         statusTone: StatusTone.warning,
       );
       await _storageService.saveState(pausedState);
@@ -808,6 +819,13 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
       await _storageService.saveState(nextState);
       _sendSnapshot(nextState);
 
+      if (CheckingLocationLogic.isNightModeAfterCheckoutActive(
+        state: nextState,
+      )) {
+        await _reloadTrackingState(forceRestart: true);
+        return;
+      }
+
       if (!nextState.hasAnyLocationAutomation ||
           !nextState.hasValidChave ||
           !nextState.hasApiConfig) {
@@ -900,7 +918,7 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
       );
       _rememberRemoteState(response.state);
 
-      final nextState = CheckingLocationLogic.applyRemoteState(
+      var nextState = CheckingLocationLogic.applyRemoteState(
         currentState: state,
         response: response.state,
         statusMessage:
@@ -909,12 +927,26 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
         recentAction: nextAction,
         recentLocal: resolvedLocal,
       );
+      if (CheckingLocationLogic.isNightModeAfterCheckoutActive(
+        state: nextState,
+      )) {
+        nextState = nextState.copyWith(
+          statusMessage:
+              CheckingLocationLogic.postCheckoutNightModeStatusMessage,
+          statusTone: StatusTone.warning,
+        );
+      }
       await _storageService.saveState(nextState);
       _sendSnapshot(
         nextState,
         statusMessage: nextState.statusMessage,
         statusTone: nextState.statusTone,
       );
+      if (CheckingLocationLogic.isNightModeAfterCheckoutActive(
+        state: nextState,
+      )) {
+        await _reloadTrackingState(forceRestart: true);
+      }
     } catch (error) {
       final message = error is CheckingApiException
           ? error.message
@@ -966,7 +998,7 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
       );
       _rememberRemoteState(response.state);
 
-      final nextState = CheckingLocationLogic.applyRemoteState(
+      var nextState = CheckingLocationLogic.applyRemoteState(
         currentState: state,
         response: response.state,
         statusMessage: nextAction == RegistroType.checkOut
@@ -976,12 +1008,26 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
         recentAction: nextAction,
         recentLocal: resolvedLocal,
       );
+      if (CheckingLocationLogic.isNightModeAfterCheckoutActive(
+        state: nextState,
+      )) {
+        nextState = nextState.copyWith(
+          statusMessage:
+              CheckingLocationLogic.postCheckoutNightModeStatusMessage,
+          statusTone: StatusTone.warning,
+        );
+      }
       await _storageService.saveState(nextState);
       _sendSnapshot(
         nextState,
         statusMessage: nextState.statusMessage,
         statusTone: nextState.statusTone,
       );
+      if (CheckingLocationLogic.isNightModeAfterCheckoutActive(
+        state: nextState,
+      )) {
+        await _reloadTrackingState(forceRestart: true);
+      }
     } catch (error) {
       final message = error is CheckingApiException
           ? error.message
@@ -1039,6 +1085,9 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
         'chave': state.chave,
         'registro': state.registro.name,
         'checkInProjeto': state.checkInProjeto.name,
+        'nightModeAfterCheckoutEnabled': state.nightModeAfterCheckoutEnabled,
+        'nightModeAfterCheckoutUntil':
+            state.nightModeAfterCheckoutUntil?.millisecondsSinceEpoch,
         'locationSharingEnabled': state.locationSharingEnabled,
         'autoCheckInEnabled': state.autoCheckInEnabled,
         'autoCheckOutEnabled': state.autoCheckOutEnabled,

@@ -123,7 +123,12 @@ class _CheckingScreenState extends State<CheckingScreen>
                       ),
                       const SizedBox(height: 24),
                       FilledButton(
-                        onPressed: state.isSubmitting ? null : _handleSubmit,
+                        onPressed:
+                            CheckingController.isRegisterActionInteractive(
+                              state: state,
+                            )
+                            ? _handleSubmit
+                            : null,
                         style: FilledButton.styleFrom(
                           backgroundColor: AppTheme.primary,
                           foregroundColor: Colors.white,
@@ -266,6 +271,11 @@ class _CheckingScreenState extends State<CheckingScreen>
                 },
                 onNightUpdatesChanged: (value) {
                   unawaited(_controller.setNightUpdatesDisabled(value));
+                },
+                onNightModeAfterCheckoutChanged: (value) {
+                  unawaited(
+                    _controller.setNightModeAfterCheckoutEnabled(value),
+                  );
                 },
                 onNightStartChanged: (value) {
                   unawaited(_controller.setNightPeriodStartMinutes(value));
@@ -679,6 +689,7 @@ class _SettingsSheet extends StatelessWidget {
     required this.onBatteryOptimizationChanged,
     required this.onOemBackgroundSetupChanged,
     required this.onLocationUpdateIntervalChanged,
+    required this.onNightModeAfterCheckoutChanged,
     required this.onNightUpdatesChanged,
     required this.onNightStartChanged,
     required this.onNightEndChanged,
@@ -694,6 +705,7 @@ class _SettingsSheet extends StatelessWidget {
   final ValueChanged<bool>? onBatteryOptimizationChanged;
   final ValueChanged<bool>? onOemBackgroundSetupChanged;
   final ValueChanged<int>? onLocationUpdateIntervalChanged;
+  final ValueChanged<bool>? onNightModeAfterCheckoutChanged;
   final ValueChanged<bool>? onNightUpdatesChanged;
   final ValueChanged<int>? onNightStartChanged;
   final ValueChanged<int>? onNightEndChanged;
@@ -819,23 +831,31 @@ class _SettingsSheet extends StatelessWidget {
                       ),
                       const SizedBox(height: 12),
                       _SwitchRow(
-                        label: 'Desativar Atualização Noturna:',
-                        value: state.nightUpdatesDisabled,
-                        onChanged: onNightUpdatesChanged,
+                        label: 'Modo Noturno Após Check-out:',
+                        value: state.nightModeAfterCheckoutEnabled,
+                        onChanged: onNightModeAfterCheckoutChanged,
                       ),
-                      if (state.nightUpdatesDisabled) ...[
-                        const SizedBox(height: 10),
-                        _MinutesOfDayWheelField(
-                          label: 'De',
-                          totalMinutes: state.nightPeriodStartMinutes,
-                          onChanged: onNightStartChanged,
+                      if (!state.nightModeAfterCheckoutEnabled) ...[
+                        const SizedBox(height: 12),
+                        _SwitchRow(
+                          label: 'Desativar Atualização Noturna:',
+                          value: state.nightUpdatesDisabled,
+                          onChanged: onNightUpdatesChanged,
                         ),
-                        const SizedBox(height: 8),
-                        _MinutesOfDayWheelField(
-                          label: 'Até',
-                          totalMinutes: state.nightPeriodEndMinutes,
-                          onChanged: onNightEndChanged,
-                        ),
+                        if (state.nightUpdatesDisabled) ...[
+                          const SizedBox(height: 10),
+                          _MinutesOfDayWheelField(
+                            label: 'De',
+                            totalMinutes: state.nightPeriodStartMinutes,
+                            onChanged: onNightStartChanged,
+                          ),
+                          const SizedBox(height: 8),
+                          _MinutesOfDayWheelField(
+                            label: 'Até',
+                            totalMinutes: state.nightPeriodEndMinutes,
+                            onChanged: onNightEndChanged,
+                          ),
+                        ],
                       ],
                     ],
                   ),

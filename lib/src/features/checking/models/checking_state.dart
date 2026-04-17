@@ -156,6 +156,8 @@ class CheckingState {
     required this.nightUpdatesDisabled,
     required this.nightPeriodStartMinutes,
     required this.nightPeriodEndMinutes,
+    required this.nightModeAfterCheckoutEnabled,
+    required this.nightModeAfterCheckoutUntil,
     required this.locationAccuracyThresholdMeters,
     required this.locationSharingEnabled,
     required this.canEnableLocationSharing,
@@ -191,6 +193,8 @@ class CheckingState {
       nightUpdatesDisabled: false,
       nightPeriodStartMinutes: 22 * 60,
       nightPeriodEndMinutes: 6 * 60,
+      nightModeAfterCheckoutEnabled: false,
+      nightModeAfterCheckoutUntil: null,
       locationAccuracyThresholdMeters: 30,
       locationSharingEnabled: false,
       canEnableLocationSharing: false,
@@ -276,6 +280,11 @@ class CheckingState {
           (json['nightPeriodStartMinutes'] as num?)?.toInt() ?? 22 * 60,
       nightPeriodEndMinutes:
           (json['nightPeriodEndMinutes'] as num?)?.toInt() ?? 6 * 60,
+      nightModeAfterCheckoutEnabled:
+          json['nightModeAfterCheckoutEnabled'] as bool? ?? false,
+      nightModeAfterCheckoutUntil: _parseOptionalDateTime(
+        json['nightModeAfterCheckoutUntil'] as String?,
+      ),
       locationAccuracyThresholdMeters:
           (json['locationAccuracyThresholdMeters'] as num?)?.toInt() ?? 30,
       locationSharingEnabled: locationSharingEnabled,
@@ -322,6 +331,8 @@ class CheckingState {
   final bool nightUpdatesDisabled;
   final int nightPeriodStartMinutes;
   final int nightPeriodEndMinutes;
+  final bool nightModeAfterCheckoutEnabled;
+  final DateTime? nightModeAfterCheckoutUntil;
   final int locationAccuracyThresholdMeters;
   final bool locationSharingEnabled;
   final bool canEnableLocationSharing;
@@ -449,6 +460,10 @@ class CheckingState {
       'nightUpdatesDisabled': nightUpdatesDisabled,
       'nightPeriodStartMinutes': nightPeriodStartMinutes,
       'nightPeriodEndMinutes': nightPeriodEndMinutes,
+      'nightModeAfterCheckoutEnabled': nightModeAfterCheckoutEnabled,
+      'nightModeAfterCheckoutUntil': nightModeAfterCheckoutUntil
+          ?.toUtc()
+          .toIso8601String(),
       'locationAccuracyThresholdMeters': locationAccuracyThresholdMeters,
       'locationSharingEnabled': locationSharingEnabled,
       'autoCheckInEnabled': autoCheckInEnabled,
@@ -476,6 +491,8 @@ class CheckingState {
     bool? nightUpdatesDisabled,
     int? nightPeriodStartMinutes,
     int? nightPeriodEndMinutes,
+    bool? nightModeAfterCheckoutEnabled,
+    Object? nightModeAfterCheckoutUntil = _unset,
     int? locationAccuracyThresholdMeters,
     bool? locationSharingEnabled,
     bool? canEnableLocationSharing,
@@ -512,6 +529,12 @@ class CheckingState {
           nightPeriodStartMinutes ?? this.nightPeriodStartMinutes,
       nightPeriodEndMinutes:
           nightPeriodEndMinutes ?? this.nightPeriodEndMinutes,
+      nightModeAfterCheckoutEnabled:
+          nightModeAfterCheckoutEnabled ?? this.nightModeAfterCheckoutEnabled,
+      nightModeAfterCheckoutUntil:
+          identical(nightModeAfterCheckoutUntil, _unset)
+          ? this.nightModeAfterCheckoutUntil
+          : nightModeAfterCheckoutUntil as DateTime?,
       locationAccuracyThresholdMeters:
           locationAccuracyThresholdMeters ??
           this.locationAccuracyThresholdMeters,
