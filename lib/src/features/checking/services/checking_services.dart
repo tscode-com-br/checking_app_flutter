@@ -20,22 +20,57 @@ class CheckingApiException implements Exception {
 class CheckingStorageService {
   static const _prefsKey = 'checking_flutter_state_v1';
   static const _secureApiSharedKey = 'checking_flutter_api_shared_key';
+  static const _prefsApiSharedKeyBackup =
+      'checking_flutter_api_shared_key_backup_v1';
   static const _initialAndroidSetupPromptedKey =
       'checking_flutter_initial_android_setup_prompted_v1';
 
   const CheckingStorageService({
+    this.secureStorageEnabled = true,
     this.secureStorage = const FlutterSecureStorage(),
-  });
+    Future<String?> Function(String key)? secureRead,
+    Future<void> Function(String key, String value)? secureWrite,
+    Future<void> Function(String key)? secureDelete,
+  }) : _secureRead = secureRead,
+       _secureWrite = secureWrite,
+       _secureDelete = secureDelete;
 
+  const CheckingStorageService.backgroundSafe({
+    FlutterSecureStorage secureStorage = const FlutterSecureStorage(),
+    Future<String?> Function(String key)? secureRead,
+    Future<void> Function(String key, String value)? secureWrite,
+    Future<void> Function(String key)? secureDelete,
+  }) : this(
+         secureStorageEnabled: false,
+         secureStorage: secureStorage,
+         secureRead: secureRead,
+         secureWrite: secureWrite,
+         secureDelete: secureDelete,
+       );
+
+  final bool secureStorageEnabled;
   final FlutterSecureStorage secureStorage;
+  final Future<String?> Function(String key)? _secureRead;
+  final Future<void> Function(String key, String value)? _secureWrite;
+  final Future<void> Function(String key)? _secureDelete;
 
   Future<CheckingState> loadState() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_prefsKey);
-    final secureKey = (await secureStorage.read(key: _secureApiSharedKey) ?? '')
+    final secureKey = secureStorageEnabled
+        ? (await _readSecureValue(_secureApiSharedKey)).trim()
+        : '';
+    final prefsBackupKey = (prefs.getString(_prefsApiSharedKeyBackup) ?? '')
         .trim();
+    if (secureStorageEnabled &&
+        secureKey.isNotEmpty &&
+        secureKey != prefsBackupKey) {
+      await prefs.setString(_prefsApiSharedKeyBackup, secureKey);
+    }
     final resolvedSharedKey = secureKey.isNotEmpty
         ? secureKey
+        : prefsBackupKey.isNotEmpty
+        ? prefsBackupKey
         : CheckingPresetConfig.apiSharedKey;
     if (raw == null || raw.isEmpty) {
       return CheckingState.initial().copyWith(
@@ -44,16 +79,30 @@ class CheckingStorageService {
       );
     }
 
-    final parsed = jsonDecode(raw) as Map<String, dynamic>;
-    final restoredState = CheckingState.fromJson(parsed);
-    return restoredState.copyWith(
-      chave: CheckingState.sanitizeChave(restoredState.chave),
-      apiBaseUrl: restoredState.apiBaseUrl.trim().isNotEmpty
-          ? restoredState.apiBaseUrl
-          : CheckingPresetConfig.apiBaseUrl,
-      apiSharedKey: resolvedSharedKey,
-      isLoading: false,
-    );
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) {
+        throw const FormatException(
+          'Persisted checking state must be a JSON object.',
+        );
+      }
+
+      final parsed = Map<String, dynamic>.from(decoded);
+      final restoredState = CheckingState.fromJson(parsed);
+      return restoredState.copyWith(
+        chave: CheckingState.sanitizeChave(restoredState.chave),
+        apiBaseUrl: restoredState.apiBaseUrl.trim().isNotEmpty
+            ? restoredState.apiBaseUrl
+            : CheckingPresetConfig.apiBaseUrl,
+        apiSharedKey: resolvedSharedKey,
+        isLoading: false,
+      );
+    } catch (_) {
+      return CheckingState.initial().copyWith(
+        apiSharedKey: resolvedSharedKey,
+        isLoading: false,
+      );
+    }
   }
 
   Future<void> saveState(CheckingState state) async {
@@ -62,9 +111,55 @@ class CheckingStorageService {
 
     final secureValue = state.apiSharedKey.trim();
     if (secureValue.isEmpty) {
-      await secureStorage.delete(key: _secureApiSharedKey);
+      await prefs.remove(_prefsApiSharedKeyBackup);
+      if (!secureStorageEnabled) {
+        return;
+      }
+      await _deleteSecureValue(_secureApiSharedKey);
     } else {
-      await secureStorage.write(key: _secureApiSharedKey, value: secureValue);
+      await prefs.setString(_prefsApiSharedKeyBackup, secureValue);
+      if (!secureStorageEnabled) {
+        return;
+      }
+      await _writeSecureValue(_secureApiSharedKey, secureValue);
+    }
+  }
+
+  Future<String> _readSecureValue(String key) async {
+    try {
+      final secureRead = _secureRead;
+      final value = secureRead != null
+          ? await secureRead(key)
+          : await secureStorage.read(key: key);
+      return (value ?? '').trim();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  Future<void> _writeSecureValue(String key, String value) async {
+    try {
+      final secureWrite = _secureWrite;
+      if (secureWrite != null) {
+        await secureWrite(key, value);
+        return;
+      }
+      await secureStorage.write(key: key, value: value);
+    } catch (_) {
+      // A cópia em SharedPreferences mantém o serviço de background funcional.
+    }
+  }
+
+  Future<void> _deleteSecureValue(String key) async {
+    try {
+      final secureDelete = _secureDelete;
+      if (secureDelete != null) {
+        await secureDelete(key);
+        return;
+      }
+      await secureStorage.delete(key: key);
+    } catch (_) {
+      // A limpeza em SharedPreferences já evita estado inconsistente.
     }
   }
 

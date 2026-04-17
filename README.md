@@ -37,6 +37,8 @@ Build de release assistido (versão 1.2.2):
 pwsh ./scripts/build-play-aab.ps1 -BuildName 1.2.2 -BuildNumber 9
 ```
 
+Cada build assistido passa a arquivar o `app-release.aab` e o `mapping.txt` do R8 em `build/release-artifacts/<buildName>+<buildNumber>/`.
+
 Preflight de publicacao (valida assinatura, qualidade e gera AAB):
 
 ```powershell

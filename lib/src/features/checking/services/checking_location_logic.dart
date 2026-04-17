@@ -20,28 +20,36 @@ class CheckingLocationLogic {
   static const double defaultLocationAccuracyThresholdMeters = 30;
   static const int maxLocationFetchHistoryEntries =
       LocationFetchEntry.maxStoredEntries;
+  static const int minLocationUpdateIntervalMinutes = 15;
+  static const int maxLocationUpdateIntervalMinutes = 60;
+  static const int defaultLocationUpdateIntervalSeconds = 15 * 60;
+  static const int defaultNightPeriodStartMinutes = 22 * 60;
+  static const int defaultNightPeriodEndMinutes = 6 * 60;
   static const String automaticCheckoutLocation = 'Fora do Local de Trabalho';
   static const String outsideWorkplaceCapturedLocation =
       'Fora do Ambiente de Trabalho';
   static const String checkoutZoneCapturedLocation = 'Zona de Check-Out';
-  static const Duration singaporeUtcOffset = Duration(hours: 8);
-  static const int daytimeLocationUpdateIntervalSeconds = 15 * 60;
-  static const int overnightLocationUpdateIntervalSeconds = 60 * 60;
-  static const int daytimeLocationUpdateStartHour = 6;
-  static const int overnightLocationUpdateStartHour = 22;
+  static const String uncatalogedCapturedLocation =
+      'Localização não Cadastrada';
 
-  static int resolveLocationUpdateIntervalSeconds({DateTime? referenceTime}) {
-    final reference = _toSingaporeTime(referenceTime ?? DateTime.now());
-    return _isDaytimeLocationUpdateWindow(reference)
-        ? daytimeLocationUpdateIntervalSeconds
-        : overnightLocationUpdateIntervalSeconds;
+  static int resolveLocationUpdateIntervalSeconds({
+    int? configuredIntervalSeconds,
+    DateTime? referenceTime,
+  }) {
+    return normalizeLocationUpdateIntervalSeconds(
+      configuredIntervalSeconds ?? defaultLocationUpdateIntervalSeconds,
+    );
   }
 
-  static String describeLocationUpdateInterval({DateTime? referenceTime}) {
-    return resolveLocationUpdateIntervalSeconds(referenceTime: referenceTime) ==
-            daytimeLocationUpdateIntervalSeconds
-        ? '15 min'
-        : '1 hora';
+  static String describeLocationUpdateInterval({
+    int? configuredIntervalSeconds,
+    DateTime? referenceTime,
+  }) {
+    final intervalSeconds = resolveLocationUpdateIntervalSeconds(
+      configuredIntervalSeconds: configuredIntervalSeconds,
+      referenceTime: referenceTime,
+    );
+    return '${intervalSeconds ~/ 60} min';
   }
 
   static CheckingState resolveLocationUpdateIntervalState(
@@ -49,47 +57,146 @@ class CheckingLocationLogic {
     DateTime? referenceTime,
   }) {
     final resolvedIntervalSeconds = resolveLocationUpdateIntervalSeconds(
+      configuredIntervalSeconds: state.locationUpdateIntervalSeconds,
       referenceTime: referenceTime,
     );
-    if (resolvedIntervalSeconds == state.locationUpdateIntervalSeconds) {
+    final normalizedNightPeriodStartMinutes = normalizeMinutesOfDay(
+      state.nightPeriodStartMinutes,
+      fallbackMinutes: defaultNightPeriodStartMinutes,
+    );
+    final normalizedNightPeriodEndMinutes = normalizeMinutesOfDay(
+      state.nightPeriodEndMinutes,
+      fallbackMinutes: defaultNightPeriodEndMinutes,
+    );
+    if (resolvedIntervalSeconds == state.locationUpdateIntervalSeconds &&
+        normalizedNightPeriodStartMinutes == state.nightPeriodStartMinutes &&
+        normalizedNightPeriodEndMinutes == state.nightPeriodEndMinutes) {
       return state;
     }
 
     return state.copyWith(
       locationUpdateIntervalSeconds: resolvedIntervalSeconds,
+      nightPeriodStartMinutes: normalizedNightPeriodStartMinutes,
+      nightPeriodEndMinutes: normalizedNightPeriodEndMinutes,
     );
   }
 
   static Duration delayUntilNextLocationUpdateIntervalBoundary({
+    required CheckingState state,
     DateTime? referenceTime,
   }) {
-    final referenceUtc = (referenceTime ?? DateTime.now()).toUtc();
-    final referenceSgt = _toSingaporeTime(referenceUtc);
-    final nextBoundarySgt = referenceSgt.hour < daytimeLocationUpdateStartHour
-        ? DateTime.utc(
-            referenceSgt.year,
-            referenceSgt.month,
-            referenceSgt.day,
-            daytimeLocationUpdateStartHour,
-          )
-        : referenceSgt.hour < overnightLocationUpdateStartHour
-        ? DateTime.utc(
-            referenceSgt.year,
-            referenceSgt.month,
-            referenceSgt.day,
-            overnightLocationUpdateStartHour,
-          )
-        : DateTime.utc(
-            referenceSgt.year,
-            referenceSgt.month,
-            referenceSgt.day + 1,
-            daytimeLocationUpdateStartHour,
-          );
-    final nextBoundaryUtc = nextBoundarySgt.subtract(singaporeUtcOffset);
-    final delay = nextBoundaryUtc.difference(referenceUtc);
-    return delay.isNegative || delay == Duration.zero
-        ? const Duration(seconds: 1)
-        : delay;
+    if (!state.nightUpdatesDisabled ||
+        state.nightPeriodStartMinutes == state.nightPeriodEndMinutes) {
+      return const Duration(days: 1);
+    }
+
+    final now = referenceTime ?? DateTime.now();
+    final nextBoundary = resolveNextNightPeriodBoundary(
+      referenceTime: now,
+      startMinutes: state.nightPeriodStartMinutes,
+      endMinutes: state.nightPeriodEndMinutes,
+    );
+    if (nextBoundary == null) {
+      return const Duration(days: 1);
+    }
+
+    final delay = nextBoundary.difference(now);
+    if (delay <= Duration.zero) {
+      return const Duration(minutes: 1);
+    }
+    return delay;
+  }
+
+  static int normalizeLocationUpdateIntervalSeconds(int seconds) {
+    final normalizedMinutes = ((seconds / 60).round()).clamp(
+      minLocationUpdateIntervalMinutes,
+      maxLocationUpdateIntervalMinutes,
+    );
+    return normalizedMinutes * 60;
+  }
+
+  static int normalizeMinutesOfDay(
+    int minutes, {
+    required int fallbackMinutes,
+  }) {
+    const minutesPerDay = 24 * 60;
+    final normalized = minutes % minutesPerDay;
+    return normalized < 0 ? normalized + minutesPerDay : normalized;
+  }
+
+  static bool isNightPeriodActive({
+    required CheckingState state,
+    DateTime? referenceTime,
+  }) {
+    if (!state.nightUpdatesDisabled ||
+        state.nightPeriodStartMinutes == state.nightPeriodEndMinutes) {
+      return false;
+    }
+
+    final now = referenceTime ?? DateTime.now();
+    final currentMinutes = now.hour * 60 + now.minute;
+    final startMinutes = normalizeMinutesOfDay(
+      state.nightPeriodStartMinutes,
+      fallbackMinutes: defaultNightPeriodStartMinutes,
+    );
+    final endMinutes = normalizeMinutesOfDay(
+      state.nightPeriodEndMinutes,
+      fallbackMinutes: defaultNightPeriodEndMinutes,
+    );
+    if (startMinutes < endMinutes) {
+      return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+    }
+    return currentMinutes >= startMinutes || currentMinutes < endMinutes;
+  }
+
+  static DateTime? resolveNextNightPeriodBoundary({
+    required DateTime referenceTime,
+    required int startMinutes,
+    required int endMinutes,
+  }) {
+    final normalizedStartMinutes = normalizeMinutesOfDay(
+      startMinutes,
+      fallbackMinutes: defaultNightPeriodStartMinutes,
+    );
+    final normalizedEndMinutes = normalizeMinutesOfDay(
+      endMinutes,
+      fallbackMinutes: defaultNightPeriodEndMinutes,
+    );
+    if (normalizedStartMinutes == normalizedEndMinutes) {
+      return null;
+    }
+
+    final today = DateTime(
+      referenceTime.year,
+      referenceTime.month,
+      referenceTime.day,
+    );
+    final currentMinutes = referenceTime.hour * 60 + referenceTime.minute;
+    final startToday = today.add(Duration(minutes: normalizedStartMinutes));
+    final endToday = today.add(Duration(minutes: normalizedEndMinutes));
+    final spansMidnight = normalizedStartMinutes > normalizedEndMinutes;
+    if (!spansMidnight) {
+      return currentMinutes < normalizedStartMinutes
+          ? startToday
+          : currentMinutes < normalizedEndMinutes
+          ? endToday
+          : startToday.add(const Duration(days: 1));
+    }
+
+    if (currentMinutes >= normalizedStartMinutes) {
+      return endToday.add(const Duration(days: 1));
+    }
+    if (currentMinutes < normalizedEndMinutes) {
+      return endToday;
+    }
+    return startToday;
+  }
+
+  static bool shouldRunBackgroundActivityNow({
+    required CheckingState state,
+    DateTime? referenceTime,
+  }) {
+    return !isNightPeriodActive(state: state, referenceTime: referenceTime);
   }
 
   static double resolveDistanceToLocation({
@@ -217,6 +324,30 @@ class CheckingLocationLogic {
         : null;
   }
 
+  static RegistroType? resolveAutomaticActionWithoutLocationMatch({
+    required MobileStateResponse remoteState,
+    required double? nearestDistanceMeters,
+    required bool autoCheckInEnabled,
+    required bool autoCheckOutEnabled,
+  }) {
+    final outOfRangeAction = resolveAutomaticActionOutOfRange(
+      remoteState: remoteState,
+      nearestDistanceMeters: nearestDistanceMeters,
+      autoCheckOutEnabled: autoCheckOutEnabled,
+    );
+    if (outOfRangeAction != null) {
+      return outOfRangeAction;
+    }
+
+    return shouldAttemptAutomaticNearbyWorkplaceCheckIn(
+          lastRecordedAction: resolveLastRecordedAction(remoteState),
+          nearestDistanceMeters: nearestDistanceMeters,
+          autoCheckInEnabled: autoCheckInEnabled,
+        )
+        ? RegistroType.checkIn
+        : null;
+  }
+
   static bool shouldAttemptAutomaticOutOfRangeCheckout({
     required RegistroType? lastRecordedAction,
     required double? nearestDistanceMeters,
@@ -230,6 +361,19 @@ class CheckingLocationLogic {
     return lastRecordedAction == RegistroType.checkIn;
   }
 
+  static bool shouldAttemptAutomaticNearbyWorkplaceCheckIn({
+    required RegistroType? lastRecordedAction,
+    required double? nearestDistanceMeters,
+    required bool autoCheckInEnabled,
+  }) {
+    if (!autoCheckInEnabled ||
+        nearestDistanceMeters == null ||
+        nearestDistanceMeters > outOfRangeCheckoutDistanceMeters) {
+      return false;
+    }
+    return lastRecordedAction != RegistroType.checkIn;
+  }
+
   static String resolveAutomaticEventLocal({
     required RegistroType action,
     ManagedLocation? location,
@@ -241,7 +385,7 @@ class CheckingLocationLogic {
       return automaticCheckoutLocation;
     }
 
-    return location?.local ?? automaticCheckoutLocation;
+    return location?.local ?? uncatalogedCapturedLocation;
   }
 
   static String? resolveCapturedLocationLabel({
@@ -249,11 +393,13 @@ class CheckingLocationLogic {
     double? nearestWorkplaceDistanceMeters,
   }) {
     if (location == null) {
-      if (nearestWorkplaceDistanceMeters != null &&
-          nearestWorkplaceDistanceMeters > outOfRangeCheckoutDistanceMeters) {
+      if (nearestWorkplaceDistanceMeters == null) {
+        return null;
+      }
+      if (nearestWorkplaceDistanceMeters > outOfRangeCheckoutDistanceMeters) {
         return outsideWorkplaceCapturedLocation;
       }
-      return null;
+      return uncatalogedCapturedLocation;
     }
     if (location.isCheckoutZone) {
       return checkoutZoneCapturedLocation;
@@ -403,15 +549,6 @@ class CheckingLocationLogic {
       return null;
     }
     return normalized;
-  }
-
-  static DateTime _toSingaporeTime(DateTime referenceTime) {
-    return referenceTime.toUtc().add(singaporeUtcOffset);
-  }
-
-  static bool _isDaytimeLocationUpdateWindow(DateTime singaporeTime) {
-    return singaporeTime.hour >= daytimeLocationUpdateStartHour &&
-        singaporeTime.hour < overnightLocationUpdateStartHour;
   }
 
   static RegistroType? _parseRemoteAction(String? value) {

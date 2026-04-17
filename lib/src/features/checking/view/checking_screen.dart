@@ -79,7 +79,10 @@ class _CheckingScreenState extends State<CheckingScreen>
                             children: [
                               const _TopLogo(),
                               const SizedBox(height: 20),
-                              _Header(onTapGeo: _openLocationAutomationSheet),
+                              _Header(
+                                onTapGeo: _openLocationAutomationSheet,
+                                onTapSettings: _openSettingsSheet,
+                              ),
                               _HistorySection(state: state),
                               const SizedBox(height: 8),
                               _StatusLabel(state: state),
@@ -173,7 +176,6 @@ class _CheckingScreenState extends State<CheckingScreen>
 
   Future<void> _openLocationAutomationSheet() async {
     if (!mounted) return;
-    if (!mounted) return;
     await showModalBottomSheet<void>(
       context: context,
       useSafeArea: true,
@@ -200,11 +202,76 @@ class _CheckingScreenState extends State<CheckingScreen>
               child: _LocationAutomationSheet(
                 state: state,
                 onClose: () => Navigator.of(sheetContext).maybePop(),
+                onAutomaticCheckingChanged: (value) {
+                  unawaited(_controller.setAutomaticCheckInOutEnabled(value));
+                },
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _openSettingsSheet() async {
+    if (!mounted) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return AnimatedBuilder(
+          animation: _controller,
+          builder: (context, _) {
+            final state = _controller.state;
+            final bottomSystemInset = math.max(
+              MediaQuery.paddingOf(context).bottom,
+              MediaQuery.viewPaddingOf(context).bottom,
+            );
+            return Padding(
+              padding: EdgeInsets.fromLTRB(
+                12,
+                12,
+                12,
+                MediaQuery.viewInsetsOf(context).bottom +
+                    bottomSystemInset +
+                    12,
+              ),
+              child: _SettingsSheet(
+                state: state,
+                permissionSettings: _controller.permissionSettings,
+                isAndroidSupported: _controller.isAndroidSupported,
+                onClose: () => Navigator.of(sheetContext).maybePop(),
                 onLocationSharingChanged: (value) {
                   unawaited(_controller.setLocationSharingEnabled(value));
                 },
-                onAutomaticCheckingChanged: (value) {
-                  unawaited(_controller.setAutomaticCheckInOutEnabled(value));
+                onBackgroundAccessChanged: (value) {
+                  unawaited(_controller.setBackgroundAccessEnabled(value));
+                },
+                onNotificationsChanged: (value) {
+                  unawaited(_controller.setNotificationsEnabled(value));
+                },
+                onBatteryOptimizationChanged: (value) {
+                  unawaited(_controller.setBatteryOptimizationIgnored(value));
+                },
+                onOemBackgroundSetupChanged: (value) {
+                  unawaited(_controller.setOemBackgroundSetupEnabled(value));
+                },
+                onLocationUpdateIntervalChanged: (value) {
+                  unawaited(
+                    _controller.setLocationUpdateIntervalMinutes(value),
+                  );
+                },
+                onNightUpdatesChanged: (value) {
+                  unawaited(_controller.setNightUpdatesDisabled(value));
+                },
+                onNightStartChanged: (value) {
+                  unawaited(_controller.setNightPeriodStartMinutes(value));
+                },
+                onNightEndChanged: (value) {
+                  unawaited(_controller.setNightPeriodEndMinutes(value));
                 },
               ),
             );
@@ -361,9 +428,10 @@ class _TopLogo extends StatelessWidget {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.onTapGeo});
+  const _Header({required this.onTapGeo, required this.onTapSettings});
 
   final VoidCallback onTapGeo;
+  final VoidCallback onTapSettings;
 
   @override
   Widget build(BuildContext context) {
@@ -390,6 +458,14 @@ class _Header extends StatelessWidget {
                     onPressed: onTapGeo,
                     semanticLabel: 'Automação por localização',
                     iconColor: AppTheme.primary,
+                    iconSize: 22,
+                  ),
+                  const SizedBox(width: 8),
+                  _HeaderIconButton(
+                    icon: Icons.settings_rounded,
+                    onPressed: onTapSettings,
+                    semanticLabel: 'Configurações do aplicativo',
+                    iconColor: AppTheme.textMain,
                     iconSize: 22,
                   ),
                 ],
@@ -451,13 +527,11 @@ class _LocationAutomationSheet extends StatelessWidget {
   const _LocationAutomationSheet({
     required this.state,
     required this.onClose,
-    required this.onLocationSharingChanged,
     required this.onAutomaticCheckingChanged,
   });
 
   final CheckingState state;
   final VoidCallback onClose;
-  final ValueChanged<bool>? onLocationSharingChanged;
   final ValueChanged<bool>? onAutomaticCheckingChanged;
 
   @override
@@ -467,6 +541,7 @@ class _LocationAutomationSheet extends StatelessWidget {
         : DateFormat('dd-MM-yyyy HH:mm:ss').format(state.lastLocationUpdateAt!);
     final locationUpdateIntervalText =
         CheckingController.describeLocationUpdateInterval(
+          configuredIntervalSeconds: state.locationUpdateIntervalSeconds,
           referenceTime: DateTime.now(),
         );
     final capturedLocation = state.lastDetectedLocation?.trim();
@@ -498,17 +573,6 @@ class _LocationAutomationSheet extends StatelessWidget {
                 style: Theme.of(
                   context,
                 ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 18),
-              _SwitchRow(
-                label: 'Busca por Localização:',
-                value: state.locationSharingEnabled,
-                onChanged:
-                    CheckingController.isLocationSharingToggleInteractive(
-                      state: state,
-                    )
-                    ? onLocationSharingChanged
-                    : null,
               ),
               const SizedBox(height: 12),
               _SwitchRow(
@@ -603,6 +667,461 @@ class _LocationAutomationSheet extends StatelessWidget {
   }
 }
 
+class _SettingsSheet extends StatelessWidget {
+  const _SettingsSheet({
+    required this.state,
+    required this.permissionSettings,
+    required this.isAndroidSupported,
+    required this.onClose,
+    required this.onLocationSharingChanged,
+    required this.onBackgroundAccessChanged,
+    required this.onNotificationsChanged,
+    required this.onBatteryOptimizationChanged,
+    required this.onOemBackgroundSetupChanged,
+    required this.onLocationUpdateIntervalChanged,
+    required this.onNightUpdatesChanged,
+    required this.onNightStartChanged,
+    required this.onNightEndChanged,
+  });
+
+  final CheckingState state;
+  final CheckingPermissionSettingsState permissionSettings;
+  final bool isAndroidSupported;
+  final VoidCallback onClose;
+  final ValueChanged<bool>? onLocationSharingChanged;
+  final ValueChanged<bool>? onBackgroundAccessChanged;
+  final ValueChanged<bool>? onNotificationsChanged;
+  final ValueChanged<bool>? onBatteryOptimizationChanged;
+  final ValueChanged<bool>? onOemBackgroundSetupChanged;
+  final ValueChanged<int>? onLocationUpdateIntervalChanged;
+  final ValueChanged<bool>? onNightUpdatesChanged;
+  final ValueChanged<int>? onNightStartChanged;
+  final ValueChanged<int>? onNightEndChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final intervalMinutes = state.locationUpdateIntervalSeconds ~/ 60;
+
+    return Material(
+      color: AppTheme.surface,
+      borderRadius: BorderRadius.circular(24),
+      child: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 44,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: AppTheme.border,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              Text(
+                'Configurações',
+                textAlign: TextAlign.center,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 14),
+              const _SettingsSectionTitle(title: 'Permissões'),
+              DecoratedBox(
+                decoration: _groupOutlineDecoration(),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _SwitchRow(
+                        label: 'Compartilhar Localização:',
+                        value: state.locationSharingEnabled,
+                        isBusy: state.isLocationUpdating,
+                        onChanged:
+                            CheckingController.isLocationSharingToggleInteractive(
+                              state: state,
+                            )
+                            ? onLocationSharingChanged
+                            : null,
+                      ),
+                      if (isAndroidSupported) ...[
+                        const SizedBox(height: 8),
+                        _SwitchRow(
+                          label: 'Acesso em 2º Plano:',
+                          value: permissionSettings.backgroundAccessEnabled,
+                          isBusy: permissionSettings.isRefreshing,
+                          onChanged: onBackgroundAccessChanged,
+                        ),
+                        const SizedBox(height: 8),
+                        _SwitchRow(
+                          label: 'Permitir Notificações:',
+                          value: permissionSettings.notificationsEnabled,
+                          isBusy: permissionSettings.isRefreshing,
+                          onChanged: onNotificationsChanged,
+                        ),
+                        const SizedBox(height: 8),
+                        _SwitchRow(
+                          label: 'Sem Restrições de Bateria:',
+                          value: permissionSettings.batteryOptimizationIgnored,
+                          isBusy: permissionSettings.isRefreshing,
+                          onChanged: onBatteryOptimizationChanged,
+                        ),
+                        const SizedBox(height: 8),
+                        _SwitchRow(
+                          label: 'Ativar Auto-Start:',
+                          value: state.oemBackgroundSetupEnabled,
+                          onChanged: onOemBackgroundSetupChanged,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const _SettingsSectionTitle(title: 'Ajustes Gerais'),
+              DecoratedBox(
+                decoration: _groupOutlineDecoration(),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Frequência de Atividades',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: Alignment.center,
+                        child: SizedBox(
+                          width: 136,
+                          child: _FrequencyWheelSelector(
+                            selectedMinutes: intervalMinutes,
+                            onChanged: onLocationUpdateIntervalChanged,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Aplicado imediatamente em primeiro e segundo plano.',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: AppTheme.textSoft,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      _SwitchRow(
+                        label: 'Desativar Atualização Noturna:',
+                        value: state.nightUpdatesDisabled,
+                        onChanged: onNightUpdatesChanged,
+                      ),
+                      if (state.nightUpdatesDisabled) ...[
+                        const SizedBox(height: 10),
+                        _MinutesOfDayWheelField(
+                          label: 'De',
+                          totalMinutes: state.nightPeriodStartMinutes,
+                          onChanged: onNightStartChanged,
+                        ),
+                        const SizedBox(height: 8),
+                        _MinutesOfDayWheelField(
+                          label: 'Até',
+                          totalMinutes: state.nightPeriodEndMinutes,
+                          onChanged: onNightEndChanged,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              _DangerCloseButton(onPressed: onClose),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingsSectionTitle extends StatelessWidget {
+  const _SettingsSectionTitle({required this.title});
+
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Text(
+        title,
+        textAlign: TextAlign.center,
+        style: Theme.of(
+          context,
+        ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+}
+
+class _FrequencyWheelSelector extends StatefulWidget {
+  const _FrequencyWheelSelector({
+    required this.selectedMinutes,
+    required this.onChanged,
+  });
+
+  final int selectedMinutes;
+  final ValueChanged<int>? onChanged;
+
+  @override
+  State<_FrequencyWheelSelector> createState() =>
+      _FrequencyWheelSelectorState();
+}
+
+class _FrequencyWheelSelectorState extends State<_FrequencyWheelSelector> {
+  late final FixedExtentScrollController _scrollController;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController = FixedExtentScrollController(
+      initialItem: _resolveIndex(widget.selectedMinutes),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _FrequencyWheelSelector oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final nextIndex = _resolveIndex(widget.selectedMinutes);
+    if (_scrollController.hasClients &&
+        _scrollController.selectedItem != nextIndex) {
+      _scrollController.jumpToItem(nextIndex);
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedMinutes = widget.selectedMinutes.clamp(15, 60);
+    return SizedBox(
+      height: 150,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: ListWheelScrollView.useDelegate(
+          controller: _scrollController,
+          itemExtent: 38,
+          perspective: 0.003,
+          physics: const FixedExtentScrollPhysics(),
+          onSelectedItemChanged: (index) {
+            widget.onChanged?.call(15 + index);
+          },
+          childDelegate: ListWheelChildBuilderDelegate(
+            childCount: 46,
+            builder: (context, index) {
+              final minutes = 15 + index;
+              final isSelected = minutes == selectedMinutes;
+              return Center(
+                child: Text(
+                  '$minutes min',
+                  style: TextStyle(
+                    fontSize: isSelected ? 20 : 16,
+                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                    color: isSelected ? AppTheme.primary : AppTheme.textSoft,
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  int _resolveIndex(int minutes) {
+    return minutes.clamp(15, 60) - 15;
+  }
+}
+
+class _MinutesOfDayWheelField extends StatefulWidget {
+  const _MinutesOfDayWheelField({
+    required this.label,
+    required this.totalMinutes,
+    required this.onChanged,
+  });
+
+  final String label;
+  final int totalMinutes;
+  final ValueChanged<int>? onChanged;
+
+  @override
+  State<_MinutesOfDayWheelField> createState() =>
+      _MinutesOfDayWheelFieldState();
+}
+
+class _MinutesOfDayWheelFieldState extends State<_MinutesOfDayWheelField> {
+  late final FixedExtentScrollController _hourController;
+  late final FixedExtentScrollController _minuteController;
+
+  int get _selectedHour => _normalizeMinutes(widget.totalMinutes) ~/ 60;
+  int get _selectedMinute => _normalizeMinutes(widget.totalMinutes) % 60;
+
+  @override
+  void initState() {
+    super.initState();
+    _hourController = FixedExtentScrollController(initialItem: _selectedHour);
+    _minuteController = FixedExtentScrollController(
+      initialItem: _selectedMinute,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _MinutesOfDayWheelField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_hourController.hasClients &&
+        _hourController.selectedItem != _selectedHour) {
+      _hourController.jumpToItem(_selectedHour);
+    }
+    if (_minuteController.hasClients &&
+        _minuteController.selectedItem != _selectedMinute) {
+      _minuteController.jumpToItem(_selectedMinute);
+    }
+  }
+
+  @override
+  void dispose() {
+    _hourController.dispose();
+    _minuteController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(widget.label, style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 6),
+        Align(
+          alignment: Alignment.center,
+          child: SizedBox(
+            width: 164,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 68,
+                      child: _TimeWheelColumn(
+                        controller: _hourController,
+                        itemCount: 24,
+                        selectedItem: _selectedHour,
+                        onSelectedItemChanged: (hour) {
+                          widget.onChanged?.call((hour * 60) + _selectedMinute);
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 68,
+                      child: _TimeWheelColumn(
+                        controller: _minuteController,
+                        itemCount: 60,
+                        selectedItem: _selectedMinute,
+                        onSelectedItemChanged: (minute) {
+                          widget.onChanged?.call((_selectedHour * 60) + minute);
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          _formatMinutesOfDay(widget.totalMinutes),
+          textAlign: TextAlign.right,
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: AppTheme.textSoft),
+        ),
+      ],
+    );
+  }
+
+  int _normalizeMinutes(int totalMinutes) {
+    const minutesPerDay = 24 * 60;
+    final normalized = totalMinutes % minutesPerDay;
+    return normalized < 0 ? normalized + minutesPerDay : normalized;
+  }
+}
+
+class _TimeWheelColumn extends StatelessWidget {
+  const _TimeWheelColumn({
+    required this.controller,
+    required this.itemCount,
+    required this.selectedItem,
+    required this.onSelectedItemChanged,
+  });
+
+  final FixedExtentScrollController controller;
+  final int itemCount;
+  final int selectedItem;
+  final ValueChanged<int> onSelectedItemChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 132,
+      child: ListWheelScrollView.useDelegate(
+        controller: controller,
+        itemExtent: 34,
+        perspective: 0.003,
+        physics: const FixedExtentScrollPhysics(),
+        onSelectedItemChanged: onSelectedItemChanged,
+        childDelegate: ListWheelChildBuilderDelegate(
+          childCount: itemCount,
+          builder: (context, index) {
+            final isSelected = index == selectedItem;
+            return Center(
+              child: Text(
+                index.toString().padLeft(2, '0'),
+                style: TextStyle(
+                  fontSize: isSelected ? 20 : 16,
+                  fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                  color: isSelected ? AppTheme.primary : AppTheme.textSoft,
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
 Future<void> _showRecentLocationHistoryDialog(
   BuildContext context, {
   required List<LocationFetchEntry> locationFetchHistory,
@@ -690,8 +1209,6 @@ class _RecentLocationHistoryDialogState
                       child: Scrollbar(
                         controller: _scrollController,
                         thumbVisibility: locationFetchHistory.length > 5,
-                        thickness: 4,
-                        radius: const Radius.circular(999),
                         child: ListView.separated(
                           controller: _scrollController,
                           shrinkWrap: true,
@@ -806,6 +1323,15 @@ class _RecentLocationHistoryRow extends StatelessWidget {
 
 String _formatCoordinate(double value) {
   return value.toStringAsFixed(6);
+}
+
+String _formatMinutesOfDay(int totalMinutes) {
+  const minutesPerDay = 24 * 60;
+  final normalized = totalMinutes % minutesPerDay;
+  final safeMinutes = normalized < 0 ? normalized + minutesPerDay : normalized;
+  final hours = safeMinutes ~/ 60;
+  final minutes = safeMinutes % 60;
+  return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}';
 }
 
 class _DangerCloseButton extends StatelessWidget {

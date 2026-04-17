@@ -13,6 +13,43 @@ import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+@immutable
+class CheckingPermissionSettingsState {
+  const CheckingPermissionSettingsState({
+    required this.backgroundAccessEnabled,
+    required this.notificationsEnabled,
+    required this.batteryOptimizationIgnored,
+    required this.isRefreshing,
+  });
+
+  const CheckingPermissionSettingsState.initial()
+    : backgroundAccessEnabled = false,
+      notificationsEnabled = false,
+      batteryOptimizationIgnored = false,
+      isRefreshing = false;
+
+  final bool backgroundAccessEnabled;
+  final bool notificationsEnabled;
+  final bool batteryOptimizationIgnored;
+  final bool isRefreshing;
+
+  CheckingPermissionSettingsState copyWith({
+    bool? backgroundAccessEnabled,
+    bool? notificationsEnabled,
+    bool? batteryOptimizationIgnored,
+    bool? isRefreshing,
+  }) {
+    return CheckingPermissionSettingsState(
+      backgroundAccessEnabled:
+          backgroundAccessEnabled ?? this.backgroundAccessEnabled,
+      notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
+      batteryOptimizationIgnored:
+          batteryOptimizationIgnored ?? this.batteryOptimizationIgnored,
+      isRefreshing: isRefreshing ?? this.isRefreshing,
+    );
+  }
+}
+
 class CheckingController extends ChangeNotifier {
   static const double outOfRangeCheckoutDistanceMeters =
       CheckingLocationLogic.outOfRangeCheckoutDistanceMeters;
@@ -20,6 +57,8 @@ class CheckingController extends ChangeNotifier {
       CheckingLocationLogic.defaultLocationAccuracyThresholdMeters;
   static const String automaticCheckoutLocation =
       CheckingLocationLogic.automaticCheckoutLocation;
+  static const String uncatalogedCapturedLocation =
+      CheckingLocationLogic.uncatalogedCapturedLocation;
 
   CheckingController({
     CheckingStorageService? storageService,
@@ -51,30 +90,38 @@ class CheckingController extends ChangeNotifier {
   bool _foregroundRefreshInProgress = false;
   Future<void> _pendingStateSave = Future.value();
   bool _hasHydratedHistoryForCurrentKey = false;
+  CheckingPermissionSettingsState _permissionSettings =
+      const CheckingPermissionSettingsState.initial();
   late final CheckingBackgroundLocationListener _backgroundLocationListener =
       _handleBackgroundLocationSnapshot;
 
   CheckingState get state => _state;
+  CheckingPermissionSettingsState get permissionSettings => _permissionSettings;
+  bool get isAndroidSupported => _androidBridge.isSupported;
   List<ManagedLocation> get managedLocations =>
       List.unmodifiable(_managedLocations);
 
   Future<void> initialize() async {
     if (_initialized) return;
     _initialized = true;
-    if (CheckingBackgroundLocationService.isSupported) {
-      CheckingBackgroundLocationService.addListener(
-        _backgroundLocationListener,
-      );
-    }
     try {
       _state = _resolveLocationUpdateIntervalState(
         await _storageService.loadState(),
       ).copyWith(lastCheckIn: null, lastCheckOut: null);
+      if (CheckingBackgroundLocationService.isSupported) {
+        CheckingBackgroundLocationService.configureAutoStart(
+          enabled: _state.oemBackgroundSetupEnabled,
+        );
+        CheckingBackgroundLocationService.addListener(
+          _backgroundLocationListener,
+        );
+      }
       _hasHydratedHistoryForCurrentKey = false;
       _managedLocations = await _locationCatalogService.loadLocations();
       _restartLocationUpdateIntervalBoundaryTimer();
       notifyListeners();
       await _androidBridge.initialize(onNativeAction: _handleNativeAction);
+      await refreshPermissionSettings();
       await _syncNativeAutomation();
       await _runInitialAndroidSetupIfNeeded();
       await refreshAfterEnteringForeground();
@@ -195,6 +242,7 @@ class CheckingController extends ChangeNotifier {
             autoCheckOutEnabled: false,
           ),
         );
+        await _refreshPermissionDerivedState();
         if (permissionResult.message.isNotEmpty) {
           _setStatus(permissionResult.message, StatusTone.error);
         }
@@ -214,6 +262,7 @@ class CheckingController extends ChangeNotifier {
             autoCheckOutEnabled: false,
           ),
         );
+        await _refreshPermissionDerivedState();
         if (backgroundStartResult.blockingMessage.isNotEmpty) {
           _setStatus(backgroundStartResult.blockingMessage, StatusTone.error);
         }
@@ -236,6 +285,7 @@ class CheckingController extends ChangeNotifier {
       await flushStatePersistence();
       await _refreshLocationTrackingNow();
       final oemSetupResult = await _androidBridge.requestOemBackgroundSetup();
+      await _refreshPermissionDerivedState();
       final automaticCheckEnabled = _state.automaticCheckInOutEnabled;
       final statusSegments = <String>[
         if (backgroundStartResult.warningMessage.isNotEmpty)
@@ -260,6 +310,7 @@ class CheckingController extends ChangeNotifier {
           locationSharingEnabled: false,
         ),
       );
+      await _refreshPermissionDerivedState();
       _setStatus('Falha ao ativar a busca por localização.', StatusTone.error);
     }
   }
@@ -357,6 +408,218 @@ class CheckingController extends ChangeNotifier {
     );
   }
 
+  Future<void> refreshPermissionSettings() async {
+    if (!_androidBridge.isSupported) {
+      _setPermissionSettings(const CheckingPermissionSettingsState.initial());
+      return;
+    }
+
+    _setPermissionSettings(_permissionSettings.copyWith(isRefreshing: true));
+    try {
+      final backgroundAccessEnabled = await _hasBackgroundLocationAccess();
+      final notificationsEnabled =
+          await CheckingBackgroundLocationService.isNotificationPermissionGranted();
+      final batteryOptimizationIgnored =
+          await CheckingBackgroundLocationService.isBatteryOptimizationIgnored();
+      _setPermissionSettings(
+        CheckingPermissionSettingsState(
+          backgroundAccessEnabled: backgroundAccessEnabled,
+          notificationsEnabled: notificationsEnabled,
+          batteryOptimizationIgnored: batteryOptimizationIgnored,
+          isRefreshing: false,
+        ),
+      );
+    } catch (_) {
+      _setPermissionSettings(_permissionSettings.copyWith(isRefreshing: false));
+    }
+  }
+
+  Future<void> setLocationUpdateIntervalMinutes(int minutes) async {
+    final nextIntervalSeconds =
+        CheckingLocationLogic.normalizeLocationUpdateIntervalSeconds(
+          minutes * 60,
+        );
+    if (nextIntervalSeconds == _state.locationUpdateIntervalSeconds) {
+      return;
+    }
+
+    await _applySettingsState(
+      _state.copyWith(locationUpdateIntervalSeconds: nextIntervalSeconds),
+    );
+  }
+
+  Future<void> setNightUpdatesDisabled(bool value) async {
+    if (value == _state.nightUpdatesDisabled) {
+      return;
+    }
+
+    await _applySettingsState(_state.copyWith(nightUpdatesDisabled: value));
+  }
+
+  Future<void> setNightPeriodStartMinutes(int minutes) async {
+    final normalizedMinutes = CheckingLocationLogic.normalizeMinutesOfDay(
+      minutes,
+      fallbackMinutes: CheckingLocationLogic.defaultNightPeriodStartMinutes,
+    );
+    if (normalizedMinutes == _state.nightPeriodStartMinutes) {
+      return;
+    }
+
+    await _applySettingsState(
+      _state.copyWith(nightPeriodStartMinutes: normalizedMinutes),
+    );
+  }
+
+  Future<void> setNightPeriodEndMinutes(int minutes) async {
+    final normalizedMinutes = CheckingLocationLogic.normalizeMinutesOfDay(
+      minutes,
+      fallbackMinutes: CheckingLocationLogic.defaultNightPeriodEndMinutes,
+    );
+    if (normalizedMinutes == _state.nightPeriodEndMinutes) {
+      return;
+    }
+
+    await _applySettingsState(
+      _state.copyWith(nightPeriodEndMinutes: normalizedMinutes),
+    );
+  }
+
+  Future<void> setBackgroundAccessEnabled(bool value) async {
+    if (!_androidBridge.isSupported) {
+      return;
+    }
+
+    if (!value) {
+      await openAppSettings();
+      _setStatus(
+        'Revise o acesso à localização em 2º plano nas configurações do Android.',
+        StatusTone.warning,
+      );
+      await _refreshPermissionDerivedState();
+      return;
+    }
+
+    final permissionResult = await _ensureLocationPermissionGranted(
+      interactive: true,
+    );
+    await _refreshPermissionDerivedState();
+    if (!permissionResult.granted) {
+      if (permissionResult.message.isNotEmpty) {
+        _setStatus(permissionResult.message, StatusTone.error);
+      }
+      return;
+    }
+
+    _setStatus(
+      'Acesso à localização em 2º plano liberado.',
+      StatusTone.success,
+    );
+  }
+
+  Future<void> setNotificationsEnabled(bool value) async {
+    if (!_androidBridge.isSupported) {
+      return;
+    }
+
+    if (!value) {
+      await openAppSettings();
+      _setStatus(
+        'Revise as notificações do aplicativo nas configurações do Android.',
+        StatusTone.warning,
+      );
+      await _refreshPermissionDerivedState();
+      return;
+    }
+
+    final granted =
+        await CheckingBackgroundLocationService.requestNotificationPermission(
+          interactive: true,
+        );
+    await _refreshPermissionDerivedState();
+    if (!granted) {
+      _setStatus(
+        'Permita as notificações do aplicativo para manter o monitoramento em segundo plano.',
+        StatusTone.error,
+      );
+      return;
+    }
+
+    _setStatus('Notificações do aplicativo liberadas.', StatusTone.success);
+  }
+
+  Future<void> setBatteryOptimizationIgnored(bool value) async {
+    if (!_androidBridge.isSupported) {
+      return;
+    }
+
+    if (!value) {
+      await openAppSettings();
+      _setStatus(
+        'Revise a otimização de bateria nas configurações do Android.',
+        StatusTone.warning,
+      );
+      await _refreshPermissionDerivedState();
+      return;
+    }
+
+    final ignored =
+        await CheckingBackgroundLocationService.requestIgnoreBatteryOptimization(
+          interactive: true,
+        );
+    await _refreshPermissionDerivedState();
+    if (!ignored) {
+      _setStatus(
+        'Permita ignorar a otimização de bateria para maior confiabilidade em segundo plano.',
+        StatusTone.warning,
+      );
+      return;
+    }
+
+    _setStatus(
+      'Otimização de bateria ajustada para o monitoramento em segundo plano.',
+      StatusTone.success,
+    );
+  }
+
+  Future<void> setOemBackgroundSetupEnabled(bool value) async {
+    if (!_androidBridge.isSupported) {
+      return;
+    }
+
+    if (!value) {
+      CheckingBackgroundLocationService.configureAutoStart(enabled: false);
+      _updateAndPersist(
+        _state.copyWith(oemBackgroundSetupEnabled: false),
+        syncAutomation: false,
+      );
+      await flushStatePersistence();
+      if (_state.locationSharingEnabled) {
+        await _restartLocationTracking(captureImmediately: false);
+      }
+      _setStatus('Auto-start desativado.', StatusTone.warning);
+      return;
+    }
+
+    final setupResult = await _androidBridge.requestOemBackgroundSetup();
+    CheckingBackgroundLocationService.configureAutoStart(enabled: true);
+    _updateAndPersist(
+      _state.copyWith(oemBackgroundSetupEnabled: true),
+      syncAutomation: false,
+    );
+    await flushStatePersistence();
+    if (_state.locationSharingEnabled) {
+      await _restartLocationTracking(captureImmediately: false);
+    }
+    if (setupResult.message.isNotEmpty) {
+      _setStatus(setupResult.message, StatusTone.warning);
+      return;
+    }
+    _setStatus(
+      'Configuração OEM aberta para ajustes de auto-start.',
+      StatusTone.success,
+    );
+  }
+
   Future<void> refreshAfterEnteringForeground() async {
     if (_foregroundRefreshInProgress) {
       return;
@@ -387,6 +650,7 @@ class CheckingController extends ChangeNotifier {
         interactive: false,
         updateStatus: false,
       );
+      await refreshPermissionSettings();
 
       if (!_state.hasValidChave || !_state.hasApiConfig) {
         _stopHistoryAutoRefresh();
@@ -679,7 +943,8 @@ class CheckingController extends ChangeNotifier {
     required bool backgroundServiceSupported,
   }) {
     return backgroundServiceSupported &&
-        CheckingBackgroundLocationService.shouldRunForState(state);
+        CheckingBackgroundLocationService.shouldRunForState(state) &&
+        CheckingLocationLogic.shouldRunBackgroundActivityNow(state: state);
   }
 
   @visibleForTesting
@@ -715,14 +980,22 @@ class CheckingController extends ChangeNotifier {
   }
 
   @visibleForTesting
-  static int resolveLocationUpdateIntervalSeconds({DateTime? referenceTime}) {
+  static int resolveLocationUpdateIntervalSeconds({
+    int? configuredIntervalSeconds,
+    DateTime? referenceTime,
+  }) {
     return CheckingLocationLogic.resolveLocationUpdateIntervalSeconds(
+      configuredIntervalSeconds: configuredIntervalSeconds,
       referenceTime: referenceTime,
     );
   }
 
-  static String describeLocationUpdateInterval({DateTime? referenceTime}) {
+  static String describeLocationUpdateInterval({
+    int? configuredIntervalSeconds,
+    DateTime? referenceTime,
+  }) {
     return CheckingLocationLogic.describeLocationUpdateInterval(
+      configuredIntervalSeconds: configuredIntervalSeconds,
       referenceTime: referenceTime,
     );
   }
@@ -741,6 +1014,7 @@ class CheckingController extends ChangeNotifier {
     DateTime? referenceTime,
   }) {
     return CheckingLocationLogic.delayUntilNextLocationUpdateIntervalBoundary(
+      state: _state,
       referenceTime: referenceTime,
     );
   }
@@ -1073,14 +1347,23 @@ class CheckingController extends ChangeNotifier {
       }
 
       if (matchedLocation == null) {
-        if (!shouldAttemptAutomaticOutOfRangeCheckout(
-          lastRecordedAction: _state.lastRecordedAction,
-          nearestDistanceMeters: matchResult.nearestWorkplaceDistanceMeters,
-          autoCheckOutEnabled: _state.autoCheckOutEnabled,
-        )) {
+        final shouldAttemptOutOfRangeCheckout =
+            shouldAttemptAutomaticOutOfRangeCheckout(
+              lastRecordedAction: _state.lastRecordedAction,
+              nearestDistanceMeters: matchResult.nearestWorkplaceDistanceMeters,
+              autoCheckOutEnabled: _state.autoCheckOutEnabled,
+            );
+        final shouldAttemptNearbyWorkplaceCheckIn =
+            shouldAttemptAutomaticNearbyWorkplaceCheckIn(
+              lastRecordedAction: _state.lastRecordedAction,
+              nearestDistanceMeters: matchResult.nearestWorkplaceDistanceMeters,
+              autoCheckInEnabled: _state.autoCheckInEnabled,
+            );
+        if (!shouldAttemptOutOfRangeCheckout &&
+            !shouldAttemptNearbyWorkplaceCheckIn) {
           return;
         }
-        await _submitAutomaticOutOfRangeCheckout(
+        await _submitAutomaticWithoutLocationMatch(
           matchResult.nearestWorkplaceDistanceMeters,
         );
         return;
@@ -1241,7 +1524,7 @@ class CheckingController extends ChangeNotifier {
     }
   }
 
-  Future<void> _submitAutomaticOutOfRangeCheckout(
+  Future<void> _submitAutomaticWithoutLocationMatch(
     double? nearestDistanceMeters,
   ) async {
     try {
@@ -1250,28 +1533,32 @@ class CheckingController extends ChangeNotifier {
         sharedKey: _state.apiSharedKey,
         chave: _state.chave,
       );
-      final nextAction = resolveAutomaticActionOutOfRange(
+      final nextAction = resolveAutomaticActionWithoutLocationMatch(
         remoteState: remoteState,
         nearestDistanceMeters: nearestDistanceMeters,
+        autoCheckInEnabled: _state.autoCheckInEnabled,
         autoCheckOutEnabled: _state.autoCheckOutEnabled,
       );
       if (nextAction == null) {
         return;
       }
 
+      final resolvedLocal = resolveAutomaticEventLocal(action: nextAction);
       await _submit(
         registroForcado: nextAction,
         source: 'location-automation',
-        local: automaticCheckoutLocation,
+        local: resolvedLocal,
       );
       _setStatus(
-        'Check-Out automático enviado por afastamento das áreas monitoradas.',
+        nextAction == RegistroType.checkOut
+            ? 'Check-Out automático enviado por afastamento das áreas monitoradas.'
+            : '${nextAction.label} automático enviado para $resolvedLocal.',
         StatusTone.success,
       );
     } catch (error) {
       final message = error is CheckingApiException
           ? error.message
-          : 'Falha ao executar o check-out automático por afastamento.';
+          : 'Falha ao executar a automação por localização.';
       _setStatus(message, StatusTone.error);
     }
   }
@@ -1324,6 +1611,21 @@ class CheckingController extends ChangeNotifier {
   }
 
   @visibleForTesting
+  static RegistroType? resolveAutomaticActionWithoutLocationMatch({
+    required MobileStateResponse remoteState,
+    required double? nearestDistanceMeters,
+    required bool autoCheckInEnabled,
+    required bool autoCheckOutEnabled,
+  }) {
+    return CheckingLocationLogic.resolveAutomaticActionWithoutLocationMatch(
+      remoteState: remoteState,
+      nearestDistanceMeters: nearestDistanceMeters,
+      autoCheckInEnabled: autoCheckInEnabled,
+      autoCheckOutEnabled: autoCheckOutEnabled,
+    );
+  }
+
+  @visibleForTesting
   static bool shouldAttemptAutomaticOutOfRangeCheckout({
     required RegistroType? lastRecordedAction,
     required double? nearestDistanceMeters,
@@ -1333,6 +1635,19 @@ class CheckingController extends ChangeNotifier {
       lastRecordedAction: lastRecordedAction,
       nearestDistanceMeters: nearestDistanceMeters,
       autoCheckOutEnabled: autoCheckOutEnabled,
+    );
+  }
+
+  @visibleForTesting
+  static bool shouldAttemptAutomaticNearbyWorkplaceCheckIn({
+    required RegistroType? lastRecordedAction,
+    required double? nearestDistanceMeters,
+    required bool autoCheckInEnabled,
+  }) {
+    return CheckingLocationLogic.shouldAttemptAutomaticNearbyWorkplaceCheckIn(
+      lastRecordedAction: lastRecordedAction,
+      nearestDistanceMeters: nearestDistanceMeters,
+      autoCheckInEnabled: autoCheckInEnabled,
     );
   }
 
@@ -1473,6 +1788,37 @@ class CheckingController extends ChangeNotifier {
     );
   }
 
+  Future<void> _applySettingsState(CheckingState nextState) async {
+    final resolvedState = _resolveLocationUpdateIntervalState(nextState);
+    _updateAndPersist(resolvedState, syncAutomation: false);
+    _restartLocationUpdateIntervalBoundaryTimer();
+
+    if (!_state.locationSharingEnabled) {
+      await _refreshBackgroundLocationService();
+      return;
+    }
+
+    await _restartLocationTracking(captureImmediately: false);
+    if (CheckingBackgroundLocationService.shouldRunForState(_state)) {
+      await _refreshBackgroundLocationService();
+    }
+  }
+
+  Future<void> _refreshPermissionDerivedState() async {
+    await _refreshLocationSharingAvailability(
+      interactive: false,
+      updateStatus: false,
+    );
+    await refreshPermissionSettings();
+  }
+
+  Future<bool> _hasBackgroundLocationAccess() async {
+    final permissionResult = await _ensureLocationPermissionGranted(
+      interactive: false,
+    );
+    return permissionResult.granted;
+  }
+
   void _restartHistoryAutoRefresh() {
     _stopHistoryAutoRefresh();
     if (!_state.hasValidChave || !_state.hasApiConfig) {
@@ -1525,6 +1871,10 @@ class CheckingController extends ChangeNotifier {
       return;
     }
 
+    CheckingBackgroundLocationService.configureAutoStart(
+      enabled: _state.oemBackgroundSetupEnabled,
+    );
+
     if (!_shouldRunBackgroundLocationService(_state)) {
       await CheckingBackgroundLocationService.stop();
       return;
@@ -1548,7 +1898,9 @@ class CheckingController extends ChangeNotifier {
     }
 
     await flushStatePersistence();
-    await CheckingBackgroundLocationService.start();
+    await CheckingBackgroundLocationService.start(
+      enableAutoStart: _state.oemBackgroundSetupEnabled,
+    );
     await CheckingBackgroundLocationService.requestRefresh();
   }
 
@@ -1682,6 +2034,11 @@ class CheckingController extends ChangeNotifier {
 
   void _setState(CheckingState nextState) {
     _state = nextState;
+    notifyListeners();
+  }
+
+  void _setPermissionSettings(CheckingPermissionSettingsState nextState) {
+    _permissionSettings = nextState;
     notifyListeners();
   }
 

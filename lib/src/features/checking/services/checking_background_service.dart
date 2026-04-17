@@ -69,7 +69,8 @@ class CheckingBackgroundLocationSnapshot {
       autoCheckInEnabled: map['autoCheckInEnabled'] as bool? ?? false,
       autoCheckOutEnabled: map['autoCheckOutEnabled'] as bool? ?? false,
       locationUpdateIntervalSeconds:
-          (map['locationUpdateIntervalSeconds'] as num?)?.toInt() ?? 60,
+          (map['locationUpdateIntervalSeconds'] as num?)?.toInt() ??
+          CheckingLocationLogic.defaultLocationUpdateIntervalSeconds,
       locationAccuracyThresholdMeters:
           (map['locationAccuracyThresholdMeters'] as num?)?.toInt() ?? 30,
       lastMatchedLocation: _readNullableString(map['lastMatchedLocation']),
@@ -146,13 +147,15 @@ class CheckingBackgroundLocationService {
   static const String _notificationTitle = 'Checking ativo';
   static const String _notificationText =
       'Monitoramento de localização em segundo plano em execução.';
-  static const bool stopServiceOnTaskRemoval = true;
-  static const bool allowAutomaticRestart = false;
+  static const bool stopServiceOnTaskRemoval = false;
+  static const bool allowAutomaticRestart = true;
 
   static final Map<CheckingBackgroundLocationListener, DataCallback>
   _listeners = <CheckingBackgroundLocationListener, DataCallback>{};
 
   static bool _initialized = false;
+  static bool _communicationPortInitialized = false;
+  static bool _configuredAutoRestart = allowAutomaticRestart;
 
   static bool get isSupported =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
@@ -161,13 +164,109 @@ class CheckingBackgroundLocationService {
     return state.locationSharingEnabled && state.hasAnyLocationAutomation;
   }
 
+  static Future<bool> isNotificationPermissionGranted() async {
+    if (!isSupported) {
+      return true;
+    }
+
+    initialize();
+    try {
+      final notificationPermission =
+          await FlutterForegroundTask.checkNotificationPermission();
+      return notificationPermission == NotificationPermission.granted;
+    } on MissingPluginException {
+      return true;
+    }
+  }
+
+  static Future<bool> requestNotificationPermission({
+    required bool interactive,
+  }) async {
+    if (!isSupported) {
+      return true;
+    }
+
+    initialize();
+    try {
+      if (await isNotificationPermissionGranted()) {
+        return true;
+      }
+      if (!interactive) {
+        return false;
+      }
+
+      final requestedPermission =
+          await FlutterForegroundTask.requestNotificationPermission();
+      if (requestedPermission == NotificationPermission.granted) {
+        return true;
+      }
+
+      if (requestedPermission == NotificationPermission.permanently_denied) {
+        await openAppSettings();
+      }
+      return false;
+    } on MissingPluginException {
+      return true;
+    }
+  }
+
+  static Future<bool> isBatteryOptimizationIgnored() async {
+    if (!isSupported) {
+      return true;
+    }
+
+    initialize();
+    try {
+      return await FlutterForegroundTask.isIgnoringBatteryOptimizations;
+    } on MissingPluginException {
+      return true;
+    }
+  }
+
+  static Future<bool> requestIgnoreBatteryOptimization({
+    required bool interactive,
+  }) async {
+    if (!isSupported) {
+      return true;
+    }
+
+    initialize();
+    try {
+      if (await isBatteryOptimizationIgnored()) {
+        return true;
+      }
+      if (!interactive) {
+        return false;
+      }
+
+      return await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+    } on MissingPluginException {
+      return true;
+    }
+  }
+
   static void initialize() {
-    if (!isSupported || _initialized) {
+    _initialize(allowAutoRestart: _configuredAutoRestart);
+  }
+
+  static void configureAutoStart({required bool enabled}) {
+    _initialize(allowAutoRestart: enabled);
+  }
+
+  static void _initialize({required bool allowAutoRestart}) {
+    if (!isSupported) {
       return;
     }
 
     try {
-      FlutterForegroundTask.initCommunicationPort();
+      if (!_communicationPortInitialized) {
+        FlutterForegroundTask.initCommunicationPort();
+        _communicationPortInitialized = true;
+      }
+      if (_initialized && _configuredAutoRestart == allowAutoRestart) {
+        return;
+      }
+
       FlutterForegroundTask.init(
         androidNotificationOptions: AndroidNotificationOptions(
           channelId: 'checking_location_tracking',
@@ -185,15 +284,16 @@ class CheckingBackgroundLocationService {
         ),
         foregroundTaskOptions: ForegroundTaskOptions(
           eventAction: ForegroundTaskEventAction.nothing(),
-          autoRunOnBoot: true,
-          autoRunOnMyPackageReplaced: true,
+          autoRunOnBoot: allowAutoRestart,
+          autoRunOnMyPackageReplaced: allowAutoRestart,
           allowWakeLock: true,
           allowWifiLock: false,
-          allowAutoRestart: allowAutomaticRestart,
+          allowAutoRestart: allowAutoRestart,
           stopWithTask: stopServiceOnTaskRemoval,
         ),
       );
       _initialized = true;
+      _configuredAutoRestart = allowAutoRestart;
     } on MissingPluginException {
       _initialized = false;
     }
@@ -239,30 +339,12 @@ class CheckingBackgroundLocationService {
     initialize();
 
     try {
-      final notificationPermission =
-          await FlutterForegroundTask.checkNotificationPermission();
-      if (notificationPermission != NotificationPermission.granted) {
-        if (!interactive) {
-          return const CheckingBackgroundStartResult(
-            ready: false,
-            blockingMessage:
-                'Permita as notificações do aplicativo para habilitar a busca por localização.',
-          );
-        }
-
-        final requestedPermission =
-            await FlutterForegroundTask.requestNotificationPermission();
-        if (requestedPermission != NotificationPermission.granted) {
-          if (requestedPermission ==
-              NotificationPermission.permanently_denied) {
-            await openAppSettings();
-          }
-          return const CheckingBackgroundStartResult(
-            ready: false,
-            blockingMessage:
-                'Permita as notificações do aplicativo para manter o monitoramento em segundo plano.',
-          );
-        }
+      if (!await requestNotificationPermission(interactive: interactive)) {
+        return const CheckingBackgroundStartResult(
+          ready: false,
+          blockingMessage:
+              'Permita as notificações do aplicativo para manter o monitoramento em segundo plano.',
+        );
       }
     } on MissingPluginException {
       return const CheckingBackgroundStartResult(ready: true);
@@ -273,9 +355,10 @@ class CheckingBackgroundLocationService {
     }
 
     try {
-      if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
-        final ignored =
-            await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+      if (!await isBatteryOptimizationIgnored()) {
+        final ignored = await requestIgnoreBatteryOptimization(
+          interactive: true,
+        );
         if (!ignored) {
           return const CheckingBackgroundStartResult(
             ready: true,
@@ -295,12 +378,16 @@ class CheckingBackgroundLocationService {
     return const CheckingBackgroundStartResult(ready: true);
   }
 
-  static Future<void> start() async {
+  static Future<void> start({bool? enableAutoStart}) async {
     if (!isSupported) {
       return;
     }
 
-    initialize();
+    if (enableAutoStart != null) {
+      configureAutoStart(enabled: enableAutoStart);
+    } else {
+      initialize();
+    }
     try {
       if (await FlutterForegroundTask.isRunningService) {
         return;
@@ -381,7 +468,8 @@ void _startBackgroundLocationTask() {
 class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
   _CheckingBackgroundLocationTaskHandler();
 
-  final CheckingStorageService _storageService = const CheckingStorageService();
+  final CheckingStorageService _storageService =
+      const CheckingStorageService.backgroundSafe();
   final CheckingApiService _apiService = CheckingApiService();
   final LocationCatalogService _locationCatalogService =
       LocationCatalogService();
@@ -397,7 +485,7 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
-    await _reloadTrackingState(forceRestart: true);
+    await _runGuarded(() => _reloadTrackingState(forceRestart: true));
   }
 
   @override
@@ -405,15 +493,12 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
 
   @override
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
-    await _positionSubscription?.cancel();
-    _positionSubscription = null;
-    _scheduleBoundaryTimer?.cancel();
-    _scheduleBoundaryTimer = null;
-    _locationCaptureTimer?.cancel();
-    _locationCaptureTimer = null;
-    _lastKnownRemoteState = null;
-    _lastKnownRemoteStateAt = null;
-    _currentIntervalSeconds = null;
+    await _runGuarded(() async {
+      await _cancelTracking(keepScheduleBoundaryTimer: false);
+      _lastKnownRemoteState = null;
+      _lastKnownRemoteStateAt = null;
+      _currentIntervalSeconds = null;
+    });
   }
 
   @override
@@ -429,7 +514,7 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
 
     _lastKnownRemoteState = null;
     _lastKnownRemoteStateAt = null;
-    unawaited(_reloadTrackingState(forceRestart: true));
+    unawaited(_runGuarded(() => _reloadTrackingState(forceRestart: true)));
   }
 
   Future<void> _reloadTrackingState({required bool forceRestart}) async {
@@ -437,42 +522,49 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
       await _storageService.loadState(),
     );
     if (!CheckingBackgroundLocationService.shouldRunForState(state)) {
-      await _positionSubscription?.cancel();
-      _positionSubscription = null;
-      _scheduleBoundaryTimer?.cancel();
-      _scheduleBoundaryTimer = null;
-      _locationCaptureTimer?.cancel();
-      _locationCaptureTimer = null;
+      await _cancelTracking(keepScheduleBoundaryTimer: false);
       _currentIntervalSeconds = null;
       await _stopService();
+      return;
+    }
+
+    if (!CheckingLocationLogic.shouldRunBackgroundActivityNow(state: state)) {
+      final pausedState = state.copyWith(
+        statusMessage:
+            'Atualizações em segundo plano pausadas no período noturno configurado.',
+        statusTone: StatusTone.warning,
+      );
+      await _storageService.saveState(pausedState);
+      _sendSnapshot(
+        pausedState,
+        statusMessage: pausedState.statusMessage,
+        statusTone: pausedState.statusTone,
+      );
+      await _cancelTracking(keepScheduleBoundaryTimer: false);
+      _currentIntervalSeconds = null;
+      _restartScheduleBoundaryTimer(state);
       return;
     }
 
     final hasPermission = await _hasBackgroundLocationPermission();
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!hasPermission || !serviceEnabled) {
-      final disabledState = state.copyWith(
-        locationSharingEnabled: false,
-        autoCheckInEnabled: false,
-        autoCheckOutEnabled: false,
-        lastMatchedLocation: null,
-        lastDetectedLocation: null,
-        lastLocationUpdateAt: null,
-      );
-      await _storageService.saveState(disabledState);
-      _sendSnapshot(
-        disabledState,
-        statusMessage: serviceEnabled
-            ? 'Permita a localização em segundo plano para retomar o monitoramento.'
-            : 'Ative o serviço de localização do Android para retomar o monitoramento.',
+      final statusMessage = serviceEnabled
+          ? 'Permita a localização em segundo plano para retomar o monitoramento.'
+          : 'Ative o serviço de localização do Android para retomar o monitoramento.';
+      final blockedState = state.copyWith(
+        statusMessage: statusMessage,
         statusTone: StatusTone.warning,
       );
-      await _positionSubscription?.cancel();
-      _positionSubscription = null;
-      _scheduleBoundaryTimer?.cancel();
-      _scheduleBoundaryTimer = null;
+      await _storageService.saveState(blockedState);
+      _sendSnapshot(
+        blockedState,
+        statusMessage: statusMessage,
+        statusTone: StatusTone.warning,
+      );
+      await _cancelTracking(keepScheduleBoundaryTimer: true);
       _currentIntervalSeconds = null;
-      await _stopService();
+      _scheduleTrackingRetry();
       return;
     }
 
@@ -486,8 +578,7 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
   }
 
   Future<void> _restartTracking(CheckingState state) async {
-    await _positionSubscription?.cancel();
-    _positionSubscription = null;
+    await _cancelTracking(keepScheduleBoundaryTimer: true);
     _currentIntervalSeconds = state.locationUpdateIntervalSeconds;
 
     final locationSettings = AndroidSettings(
@@ -500,14 +591,18 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
 
     _positionSubscription =
         Geolocator.getPositionStream(locationSettings: locationSettings).listen(
-          (position) => unawaited(_handlePositionUpdate(position)),
-          onError: (_) {
-            _sendSnapshot(
-              state,
-              statusMessage: 'Falha ao atualizar a localização do aparelho.',
-              statusTone: StatusTone.error,
-            );
-          },
+          (position) =>
+              unawaited(_runGuarded(() => _handlePositionUpdate(position))),
+          onError: (error) => unawaited(
+            _runGuarded(
+              () => _handleTrackingFailure(
+                state,
+                error,
+                fallbackMessage:
+                    'Falha ao atualizar a localização do aparelho.',
+              ),
+            ),
+          ),
         );
     _restartLocationCaptureTimer(state);
 
@@ -538,7 +633,7 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
           accuracy: LocationAccuracy.best,
         ),
       );
-      await _handlePositionUpdate(currentPosition);
+      await _runGuarded(() => _handlePositionUpdate(currentPosition));
     } catch (_) {
       // O serviço continua tentando as próximas leituras periódicas ou da stream.
     }
@@ -549,13 +644,87 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
     _scheduleBoundaryTimer = null;
 
     _scheduleBoundaryTimer = Timer(
-      CheckingLocationLogic.delayUntilNextLocationUpdateIntervalBoundary(),
+      CheckingLocationLogic.delayUntilNextLocationUpdateIntervalBoundary(
+        state: state,
+      ),
       () {
         _lastKnownRemoteState = null;
         _lastKnownRemoteStateAt = null;
-        unawaited(_reloadTrackingState(forceRestart: true));
+        unawaited(_runGuarded(() => _reloadTrackingState(forceRestart: true)));
       },
     );
+  }
+
+  void _scheduleTrackingRetry() {
+    _scheduleBoundaryTimer?.cancel();
+    _scheduleBoundaryTimer = Timer(const Duration(minutes: 1), () {
+      _lastKnownRemoteState = null;
+      _lastKnownRemoteStateAt = null;
+      unawaited(_runGuarded(() => _reloadTrackingState(forceRestart: true)));
+    });
+  }
+
+  Future<void> _runGuarded(Future<void> Function() operation) async {
+    try {
+      await operation();
+    } catch (_) {
+      await _handleUnexpectedBackgroundFailure();
+    }
+  }
+
+  Future<void> _handleUnexpectedBackgroundFailure() async {
+    try {
+      final safeState = (await _storageService.loadState()).copyWith(
+        statusMessage:
+            'Falha ao manter o monitoramento em segundo plano. Abra o aplicativo para retomar a automação.',
+        statusTone: StatusTone.error,
+      );
+      await _storageService.saveState(safeState);
+      _sendSnapshot(
+        safeState,
+        statusMessage: safeState.statusMessage,
+        statusTone: safeState.statusTone,
+      );
+    } catch (_) {
+      // Se o estado não puder ser carregado, evitamos propagar a falha.
+    }
+  }
+
+  Future<void> _handleTrackingFailure(
+    CheckingState state,
+    Object error, {
+    required String fallbackMessage,
+  }) async {
+    final statusMessage = _resolveTrackingFailureMessage(
+      error,
+      fallbackMessage: fallbackMessage,
+    );
+    final warningState = state.copyWith(
+      statusMessage: statusMessage,
+      statusTone: StatusTone.warning,
+    );
+    await _storageService.saveState(warningState);
+    _sendSnapshot(
+      warningState,
+      statusMessage: statusMessage,
+      statusTone: StatusTone.warning,
+    );
+    await _cancelTracking(keepScheduleBoundaryTimer: true);
+    _currentIntervalSeconds = null;
+    _scheduleTrackingRetry();
+  }
+
+  Future<void> _cancelTracking({
+    required bool keepScheduleBoundaryTimer,
+  }) async {
+    await _positionSubscription?.cancel();
+    _positionSubscription = null;
+    _locationCaptureTimer?.cancel();
+    _locationCaptureTimer = null;
+    if (!keepScheduleBoundaryTimer) {
+      _scheduleBoundaryTimer?.cancel();
+      _scheduleBoundaryTimer = null;
+    }
   }
 
   Future<void> _handlePositionUpdate(Position position) async {
@@ -600,7 +769,9 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
 
     _processingLocationUpdate = true;
     try {
-      final managedLocations = await _locationCatalogService.loadLocations();
+      final managedLocations = await _locationCatalogService.loadLocations(
+        preferCache: true,
+      );
       final matchResult = CheckingLocationLogic.resolveLocationMatch(
         managedLocations: managedLocations,
         latitude: position.latitude,
@@ -644,14 +815,24 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
       }
 
       if (matchedLocation == null) {
-        if (!nextState.autoCheckOutEnabled ||
-            matchResult.nearestWorkplaceDistanceMeters == null ||
-            matchResult.nearestWorkplaceDistanceMeters! <=
-                CheckingLocationLogic.outOfRangeCheckoutDistanceMeters) {
+        final shouldAttemptOutOfRangeCheckout =
+            CheckingLocationLogic.shouldAttemptAutomaticOutOfRangeCheckout(
+              lastRecordedAction: nextState.lastRecordedAction,
+              nearestDistanceMeters: matchResult.nearestWorkplaceDistanceMeters,
+              autoCheckOutEnabled: nextState.autoCheckOutEnabled,
+            );
+        final shouldAttemptNearbyWorkplaceCheckIn =
+            CheckingLocationLogic.shouldAttemptAutomaticNearbyWorkplaceCheckIn(
+              lastRecordedAction: nextState.lastRecordedAction,
+              nearestDistanceMeters: matchResult.nearestWorkplaceDistanceMeters,
+              autoCheckInEnabled: nextState.autoCheckInEnabled,
+            );
+        if (!shouldAttemptOutOfRangeCheckout &&
+            !shouldAttemptNearbyWorkplaceCheckIn) {
           return;
         }
 
-        await _submitAutomaticOutOfRangeCheckout(
+        await _submitAutomaticWithoutLocationMatch(
           nextState,
           matchResult.nearestWorkplaceDistanceMeters,
         );
@@ -746,15 +927,11 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
     }
   }
 
-  Future<void> _submitAutomaticOutOfRangeCheckout(
+  Future<void> _submitAutomaticWithoutLocationMatch(
     CheckingState state,
     double? nearestDistanceMeters,
   ) async {
     try {
-      if (_canSkipFetchOutOfRange(state, nearestDistanceMeters)) {
-        return;
-      }
-
       final remoteState = await _apiService.fetchState(
         baseUrl: state.apiBaseUrl,
         sharedKey: state.apiSharedKey,
@@ -762,15 +939,20 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
       );
       _rememberRemoteState(remoteState);
 
-      final nextAction = CheckingLocationLogic.resolveAutomaticActionOutOfRange(
-        remoteState: remoteState,
-        nearestDistanceMeters: nearestDistanceMeters,
-        autoCheckOutEnabled: state.autoCheckOutEnabled,
-      );
+      final nextAction =
+          CheckingLocationLogic.resolveAutomaticActionWithoutLocationMatch(
+            remoteState: remoteState,
+            nearestDistanceMeters: nearestDistanceMeters,
+            autoCheckInEnabled: state.autoCheckInEnabled,
+            autoCheckOutEnabled: state.autoCheckOutEnabled,
+          );
       if (nextAction == null) {
         return;
       }
 
+      final resolvedLocal = CheckingLocationLogic.resolveAutomaticEventLocal(
+        action: nextAction,
+      );
       final response = await _apiService.submitEvent(
         baseUrl: state.apiBaseUrl,
         sharedKey: state.apiSharedKey,
@@ -780,18 +962,19 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
         informe: InformeType.normal.name,
         clientEventId: _buildClientEventId(),
         eventTime: DateTime.now(),
-        local: CheckingLocationLogic.automaticCheckoutLocation,
+        local: resolvedLocal,
       );
       _rememberRemoteState(response.state);
 
       final nextState = CheckingLocationLogic.applyRemoteState(
         currentState: state,
         response: response.state,
-        statusMessage:
-            'Check-Out automático enviado por afastamento das áreas monitoradas.',
+        statusMessage: nextAction == RegistroType.checkOut
+            ? 'Check-Out automático enviado por afastamento das áreas monitoradas.'
+            : '${nextAction.label} automático enviado para $resolvedLocal.',
         tone: StatusTone.success,
         recentAction: nextAction,
-        recentLocal: CheckingLocationLogic.automaticCheckoutLocation,
+        recentLocal: resolvedLocal,
       );
       await _storageService.saveState(nextState);
       _sendSnapshot(
@@ -802,7 +985,7 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
     } catch (error) {
       final message = error is CheckingApiException
           ? error.message
-          : 'Falha ao executar o check-out automático por afastamento.';
+          : 'Falha ao executar a automação por localização.';
       _sendSnapshot(
         state,
         statusMessage: message,
@@ -826,22 +1009,6 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
         null;
   }
 
-  bool _canSkipFetchOutOfRange(
-    CheckingState state,
-    double? nearestDistanceMeters,
-  ) {
-    if (!_isRemoteStateCacheFresh || _lastKnownRemoteState == null) {
-      return false;
-    }
-
-    return CheckingLocationLogic.resolveAutomaticActionOutOfRange(
-          remoteState: _lastKnownRemoteState!,
-          nearestDistanceMeters: nearestDistanceMeters,
-          autoCheckOutEnabled: state.autoCheckOutEnabled,
-        ) ==
-        null;
-  }
-
   bool get _isRemoteStateCacheFresh {
     if (_lastKnownRemoteState == null || _lastKnownRemoteStateAt == null) {
       return false;
@@ -857,9 +1024,8 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
   }
 
   Future<bool> _hasBackgroundLocationPermission() async {
-    final whenInUseStatus = await Permission.locationWhenInUse.status;
-    final alwaysStatus = await Permission.locationAlways.status;
-    return whenInUseStatus.isGranted && alwaysStatus.isGranted;
+    final permission = await Geolocator.checkPermission();
+    return permission == LocationPermission.always;
   }
 
   void _sendSnapshot(
@@ -867,35 +1033,40 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
     String? statusMessage,
     StatusTone? statusTone,
   }) {
-    FlutterForegroundTask.sendDataToMain(<String, Object?>{
-      'kind': CheckingBackgroundLocationService._taskDataKind,
-      'chave': state.chave,
-      'registro': state.registro.name,
-      'checkInProjeto': state.checkInProjeto.name,
-      'locationSharingEnabled': state.locationSharingEnabled,
-      'autoCheckInEnabled': state.autoCheckInEnabled,
-      'autoCheckOutEnabled': state.autoCheckOutEnabled,
-      'locationUpdateIntervalSeconds': state.locationUpdateIntervalSeconds,
-      'locationAccuracyThresholdMeters': state.locationAccuracyThresholdMeters,
-      'lastMatchedLocation': state.lastMatchedLocation,
-      'lastDetectedLocation': state.lastDetectedLocation,
-      'lastLocationUpdateAt':
-          state.lastLocationUpdateAt?.millisecondsSinceEpoch,
-      'locationFetchHistory': state.locationFetchHistory
-          .map(
-            (value) => <String, Object?>{
-              'timestamp': value.timestamp.millisecondsSinceEpoch,
-              'latitude': value.latitude,
-              'longitude': value.longitude,
-            },
-          )
-          .toList(growable: false),
-      'lastCheckInLocation': state.lastCheckInLocation,
-      'lastCheckIn': state.lastCheckIn?.millisecondsSinceEpoch,
-      'lastCheckOut': state.lastCheckOut?.millisecondsSinceEpoch,
-      'statusMessage': statusMessage ?? '',
-      'statusTone': (statusTone ?? StatusTone.neutral).name,
-    });
+    try {
+      FlutterForegroundTask.sendDataToMain(<String, Object?>{
+        'kind': CheckingBackgroundLocationService._taskDataKind,
+        'chave': state.chave,
+        'registro': state.registro.name,
+        'checkInProjeto': state.checkInProjeto.name,
+        'locationSharingEnabled': state.locationSharingEnabled,
+        'autoCheckInEnabled': state.autoCheckInEnabled,
+        'autoCheckOutEnabled': state.autoCheckOutEnabled,
+        'locationUpdateIntervalSeconds': state.locationUpdateIntervalSeconds,
+        'locationAccuracyThresholdMeters':
+            state.locationAccuracyThresholdMeters,
+        'lastMatchedLocation': state.lastMatchedLocation,
+        'lastDetectedLocation': state.lastDetectedLocation,
+        'lastLocationUpdateAt':
+            state.lastLocationUpdateAt?.millisecondsSinceEpoch,
+        'locationFetchHistory': state.locationFetchHistory
+            .map(
+              (value) => <String, Object?>{
+                'timestamp': value.timestamp.millisecondsSinceEpoch,
+                'latitude': value.latitude,
+                'longitude': value.longitude,
+              },
+            )
+            .toList(growable: false),
+        'lastCheckInLocation': state.lastCheckInLocation,
+        'lastCheckIn': state.lastCheckIn?.millisecondsSinceEpoch,
+        'lastCheckOut': state.lastCheckOut?.millisecondsSinceEpoch,
+        'statusMessage': statusMessage ?? '',
+        'statusTone': (statusTone ?? StatusTone.neutral).name,
+      });
+    } catch (_) {
+      // Falhas de comunicação com a UI não devem derrubar o isolate de background.
+    }
   }
 
   Future<void> _stopService() async {
@@ -912,5 +1083,21 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
         .toRadixString(16)
         .padLeft(6, '0');
     return 'flutter-auto-$now-$randomPart';
+  }
+
+  String _resolveTrackingFailureMessage(
+    Object error, {
+    required String fallbackMessage,
+  }) {
+    final normalizedMessage = error.toString().trim().toLowerCase();
+    if (normalizedMessage.contains('permission') ||
+        normalizedMessage.contains('denied')) {
+      return 'Permita a localização em segundo plano para retomar o monitoramento.';
+    }
+    if (normalizedMessage.contains('location service') ||
+        normalizedMessage.contains('service disabled')) {
+      return 'Ative o serviço de localização do Android para retomar o monitoramento.';
+    }
+    return fallbackMessage;
   }
 }

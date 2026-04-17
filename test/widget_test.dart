@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:checking/src/core/theme/app_theme.dart';
@@ -14,6 +15,7 @@ import 'package:checking/src/features/checking/services/location_catalog_service
 import 'package:checking/src/features/checking/view/checking_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   test('builds checking theme', () {
@@ -61,6 +63,22 @@ void main() {
     expect(restored.autoCheckInEnabled, isFalse);
     expect(restored.autoCheckOutEnabled, isFalse);
     expect(restored.automaticCheckInOutEnabled, isFalse);
+  });
+
+  test('restores configurable schedule settings', () {
+    final restored = CheckingState.fromJson({
+      'locationUpdateIntervalSeconds': 45 * 60,
+      'nightUpdatesDisabled': true,
+      'nightPeriodStartMinutes': 23 * 60,
+      'nightPeriodEndMinutes': 5 * 60,
+      'oemBackgroundSetupEnabled': true,
+    });
+
+    expect(restored.locationUpdateIntervalSeconds, 45 * 60);
+    expect(restored.nightUpdatesDisabled, isTrue);
+    expect(restored.nightPeriodStartMinutes, 23 * 60);
+    expect(restored.nightPeriodEndMinutes, 5 * 60);
+    expect(restored.oemBackgroundSetupEnabled, isTrue);
   });
 
   test('keeps legacy automation behavior when split flags are absent', () {
@@ -191,6 +209,142 @@ void main() {
     expect(restored.locationFetchHistory.first.latitude, 1.249494);
     expect(restored.locationFetchHistory.first.longitude, 103.614345);
   });
+
+  test(
+    'falls back to the prefs backup when secure storage read fails',
+    () async {
+      SharedPreferences.setMockInitialValues({
+        'checking_flutter_state_v1': jsonEncode(const <String, Object?>{}),
+        'checking_flutter_api_shared_key_backup_v1': 'prefs-backup-key',
+      });
+
+      final storageService = CheckingStorageService(
+        secureRead: (_) async => throw Exception('secure read failed'),
+      );
+
+      final restored = await storageService.loadState();
+
+      expect(restored.apiSharedKey, 'prefs-backup-key');
+    },
+  );
+
+  test(
+    'mirrors the secure storage key into the prefs backup on load',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+
+      final storageService = CheckingStorageService(
+        secureRead: (_) async => 'secure-storage-key',
+      );
+
+      final restored = await storageService.loadState();
+      final prefs = await SharedPreferences.getInstance();
+
+      expect(restored.apiSharedKey, 'secure-storage-key');
+      expect(
+        prefs.getString('checking_flutter_api_shared_key_backup_v1'),
+        'secure-storage-key',
+      );
+    },
+  );
+
+  test(
+    'background-safe storage loads prefs backup without touching secure storage',
+    () async {
+      SharedPreferences.setMockInitialValues({
+        'checking_flutter_api_shared_key_backup_v1': 'prefs-backup-key',
+      });
+      var secureReadCalled = false;
+
+      final storageService = CheckingStorageService.backgroundSafe(
+        secureRead: (_) async {
+          secureReadCalled = true;
+          return 'secure-storage-key';
+        },
+      );
+
+      final restored = await storageService.loadState();
+
+      expect(restored.apiSharedKey, 'prefs-backup-key');
+      expect(secureReadCalled, isFalse);
+    },
+  );
+
+  test(
+    'falls back to the initial state when persisted json is malformed',
+    () async {
+      SharedPreferences.setMockInitialValues({
+        'checking_flutter_state_v1': '{invalid-json',
+        'checking_flutter_api_shared_key_backup_v1': 'prefs-backup-key',
+      });
+
+      final storageService = const CheckingStorageService();
+      final restored = await storageService.loadState();
+
+      expect(restored.chave, isEmpty);
+      expect(restored.locationSharingEnabled, isFalse);
+      expect(restored.apiSharedKey, 'prefs-backup-key');
+    },
+  );
+
+  test('keeps the prefs backup when secure storage write fails', () async {
+    SharedPreferences.setMockInitialValues({});
+
+    final storageService = CheckingStorageService(
+      secureWrite: (unusedKey, unusedValue) async =>
+          throw Exception('secure write failed'),
+    );
+
+    await storageService.saveState(
+      CheckingState.initial().copyWith(apiSharedKey: 'persisted-mobile-key'),
+    );
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(
+      prefs.getString('checking_flutter_api_shared_key_backup_v1'),
+      'persisted-mobile-key',
+    );
+  });
+
+  test(
+    'background-safe storage writes prefs backup without touching secure storage',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      var secureWriteCalled = false;
+      var secureDeleteCalled = false;
+
+      final storageService = CheckingStorageService.backgroundSafe(
+        secureWrite: (unusedKey, unusedValue) async {
+          secureWriteCalled = true;
+        },
+        secureDelete: (unusedKey) async {
+          secureDeleteCalled = true;
+        },
+      );
+
+      await storageService.saveState(
+        CheckingState.initial().copyWith(apiSharedKey: 'persisted-mobile-key'),
+      );
+
+      var prefs = await SharedPreferences.getInstance();
+      expect(
+        prefs.getString('checking_flutter_api_shared_key_backup_v1'),
+        'persisted-mobile-key',
+      );
+      expect(secureWriteCalled, isFalse);
+
+      await storageService.saveState(
+        CheckingState.initial().copyWith(apiSharedKey: ''),
+      );
+
+      prefs = await SharedPreferences.getInstance();
+      expect(
+        prefs.getString('checking_flutter_api_shared_key_backup_v1'),
+        isNull,
+      );
+      expect(secureDeleteCalled, isFalse);
+    },
+  );
 
   test(
     'deduplicates persisted location fetch history for the same gps fix',
@@ -447,15 +601,69 @@ void main() {
     );
   });
 
-  test('stops background tracking when the app task is closed', () {
-    expect(CheckingBackgroundLocationService.stopServiceOnTaskRemoval, isTrue);
-    expect(CheckingBackgroundLocationService.allowAutomaticRestart, isFalse);
+  test('suspends background activity inside the configured night period', () {
+    final state = CheckingState.initial().copyWith(
+      nightUpdatesDisabled: true,
+      nightPeriodStartMinutes: 22 * 60,
+      nightPeriodEndMinutes: 6 * 60,
+    );
+
+    expect(
+      CheckingLocationLogic.shouldRunBackgroundActivityNow(
+        state: state,
+        referenceTime: DateTime(2026, 4, 20, 23, 30),
+      ),
+      isFalse,
+    );
+    expect(
+      CheckingLocationLogic.shouldRunBackgroundActivityNow(
+        state: state,
+        referenceTime: DateTime(2026, 4, 20, 9, 0),
+      ),
+      isTrue,
+    );
+  });
+
+  test('keeps background tracking active after task removal', () {
+    expect(CheckingBackgroundLocationService.stopServiceOnTaskRemoval, isFalse);
+    expect(CheckingBackgroundLocationService.allowAutomaticRestart, isTrue);
 
     final manifest = File(
       'android/app/src/main/AndroidManifest.xml',
     ).readAsStringSync();
-    expect(manifest, contains('android:stopWithTask="true"'));
+    expect(manifest, contains('android:stopWithTask="false"'));
   });
+
+  test(
+    'falls back to the cached location catalog when the database is unavailable',
+    () async {
+      final cachedLocation = ManagedLocation(
+        id: 1,
+        local: 'Base P80',
+        latitude: 1.255936,
+        longitude: 103.611066,
+        toleranceMeters: 150,
+        updatedAt: DateTime(2026, 4, 11, 8),
+      );
+
+      SharedPreferences.setMockInitialValues({
+        'checking_locations_catalog_cache_v1': jsonEncode(
+          <Map<String, Object?>>[cachedLocation.toDatabase()],
+        ),
+      });
+
+      final service = LocationCatalogService(
+        databaseOpener: () async => throw Exception('database unavailable'),
+      );
+
+      final restored = await service.loadLocations(preferCache: true);
+
+      expect(restored, hasLength(1));
+      expect(restored.first.local, 'Base P80');
+      expect(restored.first.latitude, 1.255936);
+      expect(restored.first.longitude, 103.611066);
+    },
+  );
 
   test('background service only runs when automatic checks are enabled', () {
     final locationOnlyState = CheckingState.initial().copyWith(
@@ -506,16 +714,28 @@ void main() {
     );
   });
 
-  test('shows separated labels for location search and automatic checks', () {
-    final screenSource = File(
-      'lib/src/features/checking/view/checking_screen.dart',
-    ).readAsStringSync();
+  test(
+    'shows dedicated settings labels for permissions and general adjustments',
+    () {
+      final screenSource = File(
+        'lib/src/features/checking/view/checking_screen.dart',
+      ).readAsStringSync();
 
-    expect(screenSource, contains("label: 'Busca por Localização:'"));
-    expect(screenSource, contains("label: 'Check-in/Check-out Automáticos:'"));
-    expect(screenSource, contains('Últimas Localizações'));
-    expect(screenSource, contains('Coordenada'));
-  });
+      expect(screenSource, contains("label: 'Compartilhar Localização:'"));
+      expect(screenSource, contains("label: 'Permitir Notificações:'"));
+      expect(screenSource, contains("label: 'Sem Restrições de Bateria:'"));
+      expect(screenSource, contains("label: 'Ativar Auto-Start:'"));
+      expect(
+        screenSource,
+        contains("label: 'Check-in/Check-out Automáticos:'"),
+      );
+      expect(screenSource, contains("'Configurações'"));
+      expect(screenSource, contains("'Permissões'"));
+      expect(screenSource, contains("'Frequência de Atividades'"));
+      expect(screenSource, contains('Últimas Localizações'));
+      expect(screenSource, contains('Coordenada'));
+    },
+  );
 
   test('caps the location fetch history to the newest ten entries', () {
     final timestamps = List<DateTime>.generate(
@@ -654,18 +874,18 @@ void main() {
     },
   );
 
-  test('uses hourly location updates during the overnight window', () {
+  test('uses 15-minute location updates during the overnight window', () {
     expect(
       CheckingController.resolveLocationUpdateIntervalSeconds(
         referenceTime: DateTime.utc(2025, 1, 6, 15, 0),
       ),
-      60 * 60,
+      15 * 60,
     );
     expect(
       CheckingController.describeLocationUpdateInterval(
         referenceTime: DateTime.utc(2025, 1, 6, 15, 0),
       ),
-      '1 hora',
+      '15 min',
     );
   });
 
@@ -975,6 +1195,13 @@ void main() {
     expect(
       CheckingController.resolveCapturedLocationLabel(
         location: null,
+        nearestWorkplaceDistanceMeters: 1500,
+      ),
+      CheckingController.uncatalogedCapturedLocation,
+    );
+    expect(
+      CheckingController.resolveCapturedLocationLabel(
+        location: null,
         nearestWorkplaceDistanceMeters: 2500,
       ),
       'Fora do Ambiente de Trabalho',
@@ -988,15 +1215,8 @@ void main() {
   });
 
   test(
-    'captured location stays blank when outside no range but still within 2 km',
+    'captured location stays blank only when there is no workplace distance to evaluate',
     () {
-      expect(
-        CheckingController.resolveCapturedLocationLabel(
-          location: null,
-          nearestWorkplaceDistanceMeters: 1500,
-        ),
-        isNull,
-      );
       expect(
         CheckingController.resolveCapturedLocationLabel(location: null),
         isNull,
@@ -1005,7 +1225,7 @@ void main() {
   );
 
   test(
-    'scenario 1 keeps the user outside the workplace without automatic action',
+    'situation 2 does not repeat check-out when the user is already checked out and far from all work areas',
     () {
       final managedLocations = _buildForegroundScenarioLocations();
       final matchResult = CheckingLocationLogic.resolveLocationMatch(
@@ -1041,7 +1261,7 @@ void main() {
   );
 
   test(
-    'scenario 2 captures Escritório Principal and performs automatic check-in',
+    'situation 3 performs automatic check-in when the user re-enters a monitored location after a check-out',
     () {
       final managedLocations = _buildForegroundScenarioLocations();
       final matchResult = CheckingLocationLogic.resolveLocationMatch(
@@ -1074,7 +1294,7 @@ void main() {
   );
 
   test(
-    'scenario 3 captures Zona de Check-Out and performs automatic check-out after a prior check-in',
+    'situation 1 performs automatic check-out in the checkout zone after a prior check-in',
     () {
       final managedLocations = _buildForegroundScenarioLocations();
       final matchResult = CheckingLocationLogic.resolveLocationMatch(
@@ -1108,7 +1328,7 @@ void main() {
   );
 
   test(
-    'scenario 4 captures Em Deslocamento and performs a new automatic check-in to update the server location',
+    'situation 4 performs a new automatic check-in when the user changes to another monitored location',
     () {
       final managedLocations = _buildForegroundScenarioLocations();
       final matchResult = CheckingLocationLogic.resolveLocationMatch(
@@ -1142,7 +1362,7 @@ void main() {
   );
 
   test(
-    'scenario 5 captures outside workplace and performs automatic check-out beyond 2 km from any work area',
+    'situation 1 also performs automatic check-out when the user is more than 2 km away from all work areas',
     () {
       final managedLocations = _buildForegroundScenarioLocations();
       final matchResult = CheckingLocationLogic.resolveLocationMatch(
@@ -1174,6 +1394,65 @@ void main() {
           autoCheckOutEnabled: true,
         ),
         RegistroType.checkOut,
+      );
+    },
+  );
+
+  test(
+    'situation 3 performs automatic check-in near the workplace even without an exact location match',
+    () {
+      const nearestDistanceMeters = 1500.0;
+
+      expect(
+        CheckingController.resolveCapturedLocationLabel(
+          location: null,
+          nearestWorkplaceDistanceMeters: nearestDistanceMeters,
+        ),
+        CheckingController.uncatalogedCapturedLocation,
+      );
+      expect(
+        CheckingController.resolveAutomaticActionWithoutLocationMatch(
+          remoteState: _buildScenarioRemoteState(
+            lastAction: RegistroType.checkOut,
+          ),
+          nearestDistanceMeters: nearestDistanceMeters,
+          autoCheckInEnabled: true,
+          autoCheckOutEnabled: true,
+        ),
+        RegistroType.checkIn,
+      );
+      expect(
+        CheckingController.resolveAutomaticEventLocal(
+          action: RegistroType.checkIn,
+        ),
+        CheckingController.uncatalogedCapturedLocation,
+      );
+    },
+  );
+
+  test(
+    'situation 5 only updates the captured location when the user is near the workplace without an exact match after a prior check-in',
+    () {
+      const nearestDistanceMeters = 1500.0;
+
+      expect(
+        CheckingController.resolveCapturedLocationLabel(
+          location: null,
+          nearestWorkplaceDistanceMeters: nearestDistanceMeters,
+        ),
+        CheckingController.uncatalogedCapturedLocation,
+      );
+      expect(
+        CheckingController.resolveAutomaticActionWithoutLocationMatch(
+          remoteState: _buildScenarioRemoteState(
+            lastAction: RegistroType.checkIn,
+            currentLocal: 'Escritório Principal',
+          ),
+          nearestDistanceMeters: nearestDistanceMeters,
+          autoCheckInEnabled: true,
+          autoCheckOutEnabled: true,
+        ),
+        isNull,
       );
     },
   );
@@ -1597,7 +1876,9 @@ class _RecordingLocationCatalogService extends LocationCatalogService {
   int replaceCalls = 0;
 
   @override
-  Future<List<ManagedLocation>> loadLocations() async {
+  Future<List<ManagedLocation>> loadLocations({
+    bool preferCache = false,
+  }) async {
     return const <ManagedLocation>[];
   }
 

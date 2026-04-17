@@ -9,12 +9,18 @@ Use this checklist to submit version 1.0.0 to Google Play with less risk.
 - [ ] `flutter analyze` passes
 - [ ] `flutter test` passes
 - [ ] Signed AAB generated at `build/app/outputs/bundle/release/app-release.aab`
+- [ ] Matching R8 mapping archived at `build/release-artifacts/<buildName>+<buildNumber>/r8-mapping/mapping.txt`
 
 Suggested command:
 
 ```powershell
 pwsh ./scripts/play-release-preflight.ps1 -BuildName 1.0.0 -BuildNumber 1
 ```
+
+Crash analysis note:
+
+- Keep the archived `mapping.txt` for every uploaded AAB.
+- If a residual crash appears obfuscated in Play Console or Android logs, use the mapping from the same uploaded build to deobfuscate the stack before investigating root cause.
 
 ## 2) App identity and release notes
 

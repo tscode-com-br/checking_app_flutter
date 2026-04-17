@@ -1,9 +1,11 @@
 param(
-    [string]$BuildName = "1.0.1",
-    [int]$BuildNumber = 2
+    [string]$BuildName = "1.4.0",
+    [int]$BuildNumber = 15
 )
 
 $ErrorActionPreference = "Stop"
+
+. (Join-Path $PSScriptRoot "release-artifact-utils.ps1")
 
 function Parse-KeyValueFile {
     param([string]$Path)
@@ -65,6 +67,11 @@ try {
     flutter build appbundle --release --build-name $BuildName --build-number $BuildNumber
 
     Write-Host "AAB gerado em: build/app/outputs/bundle/release/app-release.aab"
+    $artifactRoot = Export-CheckingReleaseArtifacts `
+        -ProjectRoot $projectRoot `
+        -BuildName $BuildName `
+        -BuildNumber $BuildNumber
+    Write-Host "Artefatos de release arquivados em: $artifactRoot"
 }
 finally {
     Pop-Location

@@ -153,11 +153,15 @@ class CheckingState {
     required this.apiBaseUrl,
     required this.apiSharedKey,
     required this.locationUpdateIntervalSeconds,
+    required this.nightUpdatesDisabled,
+    required this.nightPeriodStartMinutes,
+    required this.nightPeriodEndMinutes,
     required this.locationAccuracyThresholdMeters,
     required this.locationSharingEnabled,
     required this.canEnableLocationSharing,
     required this.autoCheckInEnabled,
     required this.autoCheckOutEnabled,
+    required this.oemBackgroundSetupEnabled,
     required this.lastMatchedLocation,
     required this.lastDetectedLocation,
     required this.lastLocationUpdateAt,
@@ -183,12 +187,16 @@ class CheckingState {
       checkInProjeto: ProjetoType.p80,
       apiBaseUrl: CheckingPresetConfig.apiBaseUrl,
       apiSharedKey: CheckingPresetConfig.apiSharedKey,
-      locationUpdateIntervalSeconds: 60,
+      locationUpdateIntervalSeconds: 15 * 60,
+      nightUpdatesDisabled: false,
+      nightPeriodStartMinutes: 22 * 60,
+      nightPeriodEndMinutes: 6 * 60,
       locationAccuracyThresholdMeters: 30,
       locationSharingEnabled: false,
       canEnableLocationSharing: false,
       autoCheckInEnabled: false,
       autoCheckOutEnabled: false,
+      oemBackgroundSetupEnabled: false,
       lastMatchedLocation: null,
       lastDetectedLocation: null,
       lastLocationUpdateAt: null,
@@ -262,13 +270,20 @@ class CheckingState {
       apiSharedKey:
           json['apiSharedKey'] as String? ?? CheckingPresetConfig.apiSharedKey,
       locationUpdateIntervalSeconds:
-          (json['locationUpdateIntervalSeconds'] as num?)?.toInt() ?? 60,
+          (json['locationUpdateIntervalSeconds'] as num?)?.toInt() ?? 15 * 60,
+      nightUpdatesDisabled: json['nightUpdatesDisabled'] as bool? ?? false,
+      nightPeriodStartMinutes:
+          (json['nightPeriodStartMinutes'] as num?)?.toInt() ?? 22 * 60,
+      nightPeriodEndMinutes:
+          (json['nightPeriodEndMinutes'] as num?)?.toInt() ?? 6 * 60,
       locationAccuracyThresholdMeters:
           (json['locationAccuracyThresholdMeters'] as num?)?.toInt() ?? 30,
       locationSharingEnabled: locationSharingEnabled,
       canEnableLocationSharing: false,
       autoCheckInEnabled: autoCheckInEnabled,
       autoCheckOutEnabled: autoCheckOutEnabled,
+      oemBackgroundSetupEnabled:
+          json['oemBackgroundSetupEnabled'] as bool? ?? false,
       lastMatchedLocation: _normalizeOptionalText(
         json['lastMatchedLocation'] as String?,
       ),
@@ -304,11 +319,15 @@ class CheckingState {
   final String apiBaseUrl;
   final String apiSharedKey;
   final int locationUpdateIntervalSeconds;
+  final bool nightUpdatesDisabled;
+  final int nightPeriodStartMinutes;
+  final int nightPeriodEndMinutes;
   final int locationAccuracyThresholdMeters;
   final bool locationSharingEnabled;
   final bool canEnableLocationSharing;
   final bool autoCheckInEnabled;
   final bool autoCheckOutEnabled;
+  final bool oemBackgroundSetupEnabled;
   final String? lastMatchedLocation;
   final String? lastDetectedLocation;
   final DateTime? lastLocationUpdateAt;
@@ -427,10 +446,14 @@ class CheckingState {
       'checkInProjeto': checkInProjeto.name,
       'apiBaseUrl': apiBaseUrl,
       'locationUpdateIntervalSeconds': locationUpdateIntervalSeconds,
+      'nightUpdatesDisabled': nightUpdatesDisabled,
+      'nightPeriodStartMinutes': nightPeriodStartMinutes,
+      'nightPeriodEndMinutes': nightPeriodEndMinutes,
       'locationAccuracyThresholdMeters': locationAccuracyThresholdMeters,
       'locationSharingEnabled': locationSharingEnabled,
       'autoCheckInEnabled': autoCheckInEnabled,
       'autoCheckOutEnabled': autoCheckOutEnabled,
+      'oemBackgroundSetupEnabled': oemBackgroundSetupEnabled,
       'lastMatchedLocation': lastMatchedLocation,
       'lastDetectedLocation': lastDetectedLocation,
       'lastLocationUpdateAt': lastLocationUpdateAt?.toUtc().toIso8601String(),
@@ -450,11 +473,15 @@ class CheckingState {
     String? apiBaseUrl,
     String? apiSharedKey,
     int? locationUpdateIntervalSeconds,
+    bool? nightUpdatesDisabled,
+    int? nightPeriodStartMinutes,
+    int? nightPeriodEndMinutes,
     int? locationAccuracyThresholdMeters,
     bool? locationSharingEnabled,
     bool? canEnableLocationSharing,
     bool? autoCheckInEnabled,
     bool? autoCheckOutEnabled,
+    bool? oemBackgroundSetupEnabled,
     Object? lastMatchedLocation = _unset,
     Object? lastDetectedLocation = _unset,
     Object? lastLocationUpdateAt = _unset,
@@ -480,6 +507,11 @@ class CheckingState {
       apiSharedKey: apiSharedKey ?? this.apiSharedKey,
       locationUpdateIntervalSeconds:
           locationUpdateIntervalSeconds ?? this.locationUpdateIntervalSeconds,
+      nightUpdatesDisabled: nightUpdatesDisabled ?? this.nightUpdatesDisabled,
+      nightPeriodStartMinutes:
+          nightPeriodStartMinutes ?? this.nightPeriodStartMinutes,
+      nightPeriodEndMinutes:
+          nightPeriodEndMinutes ?? this.nightPeriodEndMinutes,
       locationAccuracyThresholdMeters:
           locationAccuracyThresholdMeters ??
           this.locationAccuracyThresholdMeters,
@@ -489,6 +521,8 @@ class CheckingState {
           canEnableLocationSharing ?? this.canEnableLocationSharing,
       autoCheckInEnabled: autoCheckInEnabled ?? this.autoCheckInEnabled,
       autoCheckOutEnabled: autoCheckOutEnabled ?? this.autoCheckOutEnabled,
+      oemBackgroundSetupEnabled:
+          oemBackgroundSetupEnabled ?? this.oemBackgroundSetupEnabled,
       lastMatchedLocation: identical(lastMatchedLocation, _unset)
           ? this.lastMatchedLocation
           : lastMatchedLocation as String?,
