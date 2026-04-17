@@ -767,10 +767,11 @@ void main() {
         lastMatchedLocation: 'Base P80',
       );
 
-      final reconciledState = CheckingController.reconcilePermissionBackedSwitches(
-        state: currentState,
-        canEnableLocationSharing: false,
-      );
+      final reconciledState =
+          CheckingController.reconcilePermissionBackedSwitches(
+            state: currentState,
+            canEnableLocationSharing: false,
+          );
 
       expect(reconciledState.canEnableLocationSharing, isFalse);
       expect(reconciledState.locationSharingEnabled, isFalse);

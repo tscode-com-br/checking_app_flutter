@@ -985,7 +985,9 @@ class CheckingController extends ChangeNotifier {
       isLocationUpdating: false,
       locationSharingEnabled: locationSharingEnabled,
       oemBackgroundSetupEnabled: oemBackgroundSetupEnabled,
-      lastMatchedLocation: locationSharingEnabled ? state.lastMatchedLocation : null,
+      lastMatchedLocation: locationSharingEnabled
+          ? state.lastMatchedLocation
+          : null,
     );
   }
 
@@ -1147,7 +1149,8 @@ class CheckingController extends ChangeNotifier {
     final shouldPersistState =
         nextState.canEnableLocationSharing !=
             previousState.canEnableLocationSharing ||
-        nextState.locationSharingEnabled != previousState.locationSharingEnabled ||
+        nextState.locationSharingEnabled !=
+            previousState.locationSharingEnabled ||
         nextState.oemBackgroundSetupEnabled !=
             previousState.oemBackgroundSetupEnabled ||
         nextState.lastMatchedLocation != previousState.lastMatchedLocation;
