@@ -715,6 +715,73 @@ void main() {
   });
 
   test(
+    'background monitoring also depends on Android background and notification permissions',
+    () {
+      final automaticState = CheckingState.initial().copyWith(
+        locationSharingEnabled: true,
+        autoCheckInEnabled: true,
+        autoCheckOutEnabled: true,
+      );
+
+      const readyPermissions = CheckingPermissionSettingsState(
+        backgroundAccessEnabled: true,
+        notificationsEnabled: true,
+        batteryOptimizationIgnored: false,
+        isRefreshing: false,
+      );
+      const missingNotificationPermission = CheckingPermissionSettingsState(
+        backgroundAccessEnabled: true,
+        notificationsEnabled: false,
+        batteryOptimizationIgnored: true,
+        isRefreshing: false,
+      );
+
+      expect(
+        CheckingController.isConfiguredToKeepRunningInBackground(
+          state: automaticState,
+          permissionSettings: readyPermissions,
+          backgroundServiceSupported: true,
+        ),
+        isTrue,
+      );
+      expect(
+        CheckingController.isConfiguredToKeepRunningInBackground(
+          state: automaticState,
+          permissionSettings: missingNotificationPermission,
+          backgroundServiceSupported: true,
+        ),
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'permission-backed switches turn off when Android prerequisites are no longer available',
+    () {
+      final currentState = CheckingState.initial().copyWith(
+        canEnableLocationSharing: true,
+        locationSharingEnabled: true,
+        autoCheckInEnabled: true,
+        autoCheckOutEnabled: true,
+        oemBackgroundSetupEnabled: true,
+        lastMatchedLocation: 'Base P80',
+      );
+
+      final reconciledState = CheckingController.reconcilePermissionBackedSwitches(
+        state: currentState,
+        canEnableLocationSharing: false,
+      );
+
+      expect(reconciledState.canEnableLocationSharing, isFalse);
+      expect(reconciledState.locationSharingEnabled, isFalse);
+      expect(reconciledState.oemBackgroundSetupEnabled, isFalse);
+      expect(reconciledState.lastMatchedLocation, isNull);
+      expect(reconciledState.autoCheckInEnabled, isTrue);
+      expect(reconciledState.autoCheckOutEnabled, isTrue);
+    },
+  );
+
+  test(
     'shows dedicated settings labels for permissions and general adjustments',
     () {
       final screenSource = File(

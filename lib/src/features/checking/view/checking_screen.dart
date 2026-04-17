@@ -776,7 +776,10 @@ class _SettingsSheet extends StatelessWidget {
                         _SwitchRow(
                           label: 'Ativar Auto-Start:',
                           value: state.oemBackgroundSetupEnabled,
-                          onChanged: onOemBackgroundSetupChanged,
+                          isBusy: permissionSettings.isRefreshing,
+                          onChanged: state.canEnableLocationSharing
+                              ? onOemBackgroundSetupChanged
+                              : null,
                         ),
                       ],
                     ],

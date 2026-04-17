@@ -511,7 +511,7 @@ class CheckingController extends ChangeNotifier {
     }
 
     _setStatus(
-      'Acesso à localização em 2º plano liberado.',
+      'Acesso à localização em 2º plano liberado. O monitoramento contínuo em segundo plano será usado quando a busca por localização e a automação estiverem ativas.',
       StatusTone.success,
     );
   }
@@ -583,6 +583,15 @@ class CheckingController extends ChangeNotifier {
 
   Future<void> setOemBackgroundSetupEnabled(bool value) async {
     if (!_androidBridge.isSupported) {
+      return;
+    }
+
+    if (value && !_state.canEnableLocationSharing) {
+      await _refreshPermissionDerivedState();
+      _setStatus(
+        'Permita localização precisa, acesso em 2º plano e notificações antes de ativar o Auto-Start.',
+        StatusTone.warning,
+      );
       return;
     }
 
@@ -960,6 +969,41 @@ class CheckingController extends ChangeNotifier {
   }
 
   @visibleForTesting
+  static CheckingState reconcilePermissionBackedSwitches({
+    required CheckingState state,
+    required bool canEnableLocationSharing,
+  }) {
+    final locationSharingEnabled = canEnableLocationSharing
+        ? state.locationSharingEnabled
+        : false;
+    final oemBackgroundSetupEnabled = canEnableLocationSharing
+        ? state.oemBackgroundSetupEnabled
+        : false;
+
+    return state.copyWith(
+      canEnableLocationSharing: canEnableLocationSharing,
+      isLocationUpdating: false,
+      locationSharingEnabled: locationSharingEnabled,
+      oemBackgroundSetupEnabled: oemBackgroundSetupEnabled,
+      lastMatchedLocation: locationSharingEnabled ? state.lastMatchedLocation : null,
+    );
+  }
+
+  @visibleForTesting
+  static bool isConfiguredToKeepRunningInBackground({
+    required CheckingState state,
+    required CheckingPermissionSettingsState permissionSettings,
+    required bool backgroundServiceSupported,
+  }) {
+    return permissionSettings.backgroundAccessEnabled &&
+        permissionSettings.notificationsEnabled &&
+        shouldRunBackgroundLocationService(
+          state: state,
+          backgroundServiceSupported: backgroundServiceSupported,
+        );
+  }
+
+  @visibleForTesting
   static bool resolveControlFlagAfterSnapshot({
     required bool currentValue,
     required bool snapshotLocationSharingEnabled,
@@ -1033,7 +1077,34 @@ class CheckingController extends ChangeNotifier {
       interactive: true,
       updateStatus: true,
     );
+    await refreshPermissionSettings();
+    await _enableLocationSharingAfterInitialAndroidSetup();
     await _storageService.markInitialAndroidSetupPrompted();
+  }
+
+  Future<void> _enableLocationSharingAfterInitialAndroidSetup() async {
+    if (!_state.canEnableLocationSharing || _state.locationSharingEnabled) {
+      return;
+    }
+
+    if (_managedLocations.isEmpty) {
+      await refreshLocationsCatalog(silent: true, updateStatus: false);
+    } else {
+      await refreshLocationUpdateInterval(
+        restartLocationTrackingIfNeeded: false,
+      );
+    }
+
+    _updateAndPersist(
+      _state.copyWith(locationSharingEnabled: true, isLocationUpdating: false),
+      syncAutomation: false,
+    );
+    await flushStatePersistence();
+    await _refreshLocationTrackingNow();
+    _setStatus(
+      'Permissões iniciais liberadas. Busca por localização ativada automaticamente.',
+      StatusTone.success,
+    );
   }
 
   Future<void> _refreshLocationSharingAvailability({
@@ -1058,16 +1129,30 @@ class CheckingController extends ChangeNotifier {
         ? await _androidBridge.requestOemBackgroundSetup()
         : CheckingOemBackgroundSetupResult.empty;
 
-    var nextState = _state.copyWith(
+    final previousState = _state;
+    var nextState = reconcilePermissionBackedSwitches(
+      state: _state,
       canEnableLocationSharing: canEnableLocationSharing,
-      isLocationUpdating: false,
     );
-    if (!canEnableLocationSharing && _state.locationSharingEnabled) {
+    if (!canEnableLocationSharing && previousState.oemBackgroundSetupEnabled) {
+      CheckingBackgroundLocationService.configureAutoStart(enabled: false);
+    }
+
+    final permissionsRevokedWhileTracking =
+        !canEnableLocationSharing && previousState.locationSharingEnabled;
+    if (permissionsRevokedWhileTracking) {
       await _stopLocationTracking();
-      nextState = nextState.copyWith(
-        locationSharingEnabled: false,
-        lastMatchedLocation: null,
-      );
+    }
+
+    final shouldPersistState =
+        nextState.canEnableLocationSharing !=
+            previousState.canEnableLocationSharing ||
+        nextState.locationSharingEnabled != previousState.locationSharingEnabled ||
+        nextState.oemBackgroundSetupEnabled !=
+            previousState.oemBackgroundSetupEnabled ||
+        nextState.lastMatchedLocation != previousState.lastMatchedLocation;
+
+    if (shouldPersistState) {
       _updateAndPersist(nextState, syncAutomation: false);
       await flushStatePersistence();
     } else {
