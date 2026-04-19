@@ -2,6 +2,13 @@
 
 Aplicativo Android em Flutter para registro de Check-In e Check-Out do projeto Checking.
 
+## Situacao de repositorio
+
+- Este diretorio continua com `.git` proprio no workspace.
+- O procedimento oficial do projeto nao usa mais commit/push deste app.
+- Nao usar `git subtree` nem push deste repositorio como parte da rotina operacional.
+- O unico fluxo oficial de commit/push do projeto fica no repositorio principal `checkcheck`.
+
 ## Versão de publicação
 
 - versão alvo para a Google Play: `1.2.2`
@@ -79,23 +86,12 @@ Checklist operacional completo para submissao:
 - `docs/google-play-submission-checklist.md`
 - `docs/google-play-console-content.md`
 
-## Publicação do código no repositório dedicado do app
+## Operacao Git atual
 
-Este app está dentro de um monorepo. Para publicar somente a pasta `checking_android_new` no repositório dedicado do app Flutter, use `git subtree`:
+O app continua disponivel no workspace para leitura, manutencao local, build e testes, mas nao existe mais procedimento oficial de publicacao por Git para este diretorio.
 
-```bash
-# na raiz do monorepo
-git subtree split --prefix checking_android_new -b checking-app-release
+Regra pratica:
 
-# HTTPS
-git push https://github.com/tscode-com-br/checking_app_flutter.git checking-app-release:main
-
-# ou SSH
-git push git@github.com:tscode-com-br/checking_app_flutter.git checking-app-release:main
-```
-
-Opcionalmente, depois do push:
-
-```bash
-git branch -D checking-app-release
-```
+- nao fazer `git commit` neste diretorio como parte da rotina operacional do projeto;
+- nao fazer `git push` deste diretorio;
+- nao usar `git subtree` a partir do repositorio principal para tentar sincronizar o app.
