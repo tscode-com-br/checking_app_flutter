@@ -37,6 +37,7 @@ class CheckingBackgroundLocationSnapshot {
     required this.autoCheckOutEnabled,
     required this.locationUpdateIntervalSeconds,
     required this.locationAccuracyThresholdMeters,
+    required this.minimumCheckoutDistanceMetersByProject,
     required this.lastMatchedLocation,
     required this.lastDetectedLocation,
     required this.lastLocationUpdateAt,
@@ -80,6 +81,10 @@ class CheckingBackgroundLocationSnapshot {
           CheckingLocationLogic.defaultLocationUpdateIntervalSeconds,
       locationAccuracyThresholdMeters:
           (map['locationAccuracyThresholdMeters'] as num?)?.toInt() ?? 30,
+      minimumCheckoutDistanceMetersByProject:
+          _readMinimumCheckoutDistanceMetersByProject(
+            map['minimumCheckoutDistanceMetersByProject'],
+          ),
       lastMatchedLocation: _readNullableString(map['lastMatchedLocation']),
       lastDetectedLocation: _readNullableString(map['lastDetectedLocation']),
       lastLocationUpdateAt: _readNullableDateTime(
@@ -109,6 +114,7 @@ class CheckingBackgroundLocationSnapshot {
   final bool autoCheckOutEnabled;
   final int locationUpdateIntervalSeconds;
   final int locationAccuracyThresholdMeters;
+  final Map<String, int> minimumCheckoutDistanceMetersByProject;
   final String? lastMatchedLocation;
   final String? lastDetectedLocation;
   final DateTime? lastLocationUpdateAt;
@@ -119,12 +125,37 @@ class CheckingBackgroundLocationSnapshot {
   final String statusMessage;
   final StatusTone statusTone;
 
+  int get minimumCheckoutDistanceMeters =>
+      minimumCheckoutDistanceMetersByProject[checkInProjeto.apiValue] ??
+      CheckingState.defaultMinimumCheckoutDistanceMeters;
+
   static String? _readNullableString(Object? value) {
     final normalized = (value as String?)?.trim();
     if (normalized == null || normalized.isEmpty) {
       return null;
     }
     return normalized;
+  }
+
+  static Map<String, int> _readMinimumCheckoutDistanceMetersByProject(
+    Object? value,
+  ) {
+    if (value is! Map) {
+      return const <String, int>{};
+    }
+
+    final parsed = <String, int>{};
+    for (final entry in value.entries) {
+      final key = entry.key is String
+          ? entry.key.toString().trim().toUpperCase()
+          : '';
+      final meters = (entry.value as num?)?.toInt();
+      if (key.isEmpty || meters == null || meters < 1) {
+        continue;
+      }
+      parsed[key] = meters;
+    }
+    return Map<String, int>.unmodifiable(parsed);
   }
 
   static DateTime? _readNullableDateTime(num? value) {
@@ -801,6 +832,9 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
             location: matchedLocation,
             nearestWorkplaceDistanceMeters:
                 matchResult.nearestWorkplaceDistanceMeters,
+            minimumCheckoutDistanceMeters: baseState
+                .minimumCheckoutDistanceMeters
+                .toDouble(),
           );
       final nextState = matchedLocation == null
           ? baseState.copyWith(
@@ -837,12 +871,18 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
             CheckingLocationLogic.shouldAttemptAutomaticOutOfRangeCheckout(
               lastRecordedAction: nextState.lastRecordedAction,
               nearestDistanceMeters: matchResult.nearestWorkplaceDistanceMeters,
+              minimumCheckoutDistanceMeters: nextState
+                  .minimumCheckoutDistanceMeters
+                  .toDouble(),
               autoCheckOutEnabled: nextState.autoCheckOutEnabled,
             );
         final shouldAttemptNearbyWorkplaceCheckIn =
             CheckingLocationLogic.shouldAttemptAutomaticNearbyWorkplaceCheckIn(
               lastRecordedAction: nextState.lastRecordedAction,
               nearestDistanceMeters: matchResult.nearestWorkplaceDistanceMeters,
+              minimumCheckoutDistanceMeters: nextState
+                  .minimumCheckoutDistanceMeters
+                  .toDouble(),
               autoCheckInEnabled: nextState.autoCheckInEnabled,
             );
         if (!shouldAttemptOutOfRangeCheckout &&
@@ -975,6 +1015,8 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
           CheckingLocationLogic.resolveAutomaticActionWithoutLocationMatch(
             remoteState: remoteState,
             nearestDistanceMeters: nearestDistanceMeters,
+            minimumCheckoutDistanceMeters: state.minimumCheckoutDistanceMeters
+                .toDouble(),
             autoCheckInEnabled: state.autoCheckInEnabled,
             autoCheckOutEnabled: state.autoCheckOutEnabled,
           );
@@ -1094,6 +1136,8 @@ class _CheckingBackgroundLocationTaskHandler extends TaskHandler {
         'locationUpdateIntervalSeconds': state.locationUpdateIntervalSeconds,
         'locationAccuracyThresholdMeters':
             state.locationAccuracyThresholdMeters,
+        'minimumCheckoutDistanceMetersByProject':
+            state.minimumCheckoutDistanceMetersByProject,
         'lastMatchedLocation': state.lastMatchedLocation,
         'lastDetectedLocation': state.lastDetectedLocation,
         'lastLocationUpdateAt':

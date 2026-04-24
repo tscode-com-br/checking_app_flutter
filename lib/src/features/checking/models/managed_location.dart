@@ -174,6 +174,7 @@ class LocationCatalogResponse {
     required this.items,
     required this.syncedAt,
     required this.locationAccuracyThresholdMeters,
+    required this.minimumCheckoutDistanceMetersByProject,
   });
 
   factory LocationCatalogResponse.fromJson(Map<String, dynamic> json) {
@@ -187,10 +188,36 @@ class LocationCatalogResponse {
           ManagedLocation._parseDateTime(json['synced_at']) ?? DateTime.now(),
       locationAccuracyThresholdMeters:
           (json['location_accuracy_threshold_meters'] as num?)?.toInt() ?? 30,
+      minimumCheckoutDistanceMetersByProject:
+          _parseMinimumCheckoutDistanceMetersByProject(
+            json['minimum_checkout_distance_meters_by_project'],
+          ),
     );
+  }
+
+  static Map<String, int> _parseMinimumCheckoutDistanceMetersByProject(
+    Object? value,
+  ) {
+    if (value is! Map) {
+      return const <String, int>{};
+    }
+
+    final parsed = <String, int>{};
+    for (final entry in value.entries) {
+      final key = entry.key is String
+          ? entry.key.toString().trim().toUpperCase()
+          : '';
+      final meters = (entry.value as num?)?.toInt();
+      if (key.isEmpty || meters == null || meters < 1) {
+        continue;
+      }
+      parsed[key] = meters;
+    }
+    return Map<String, int>.unmodifiable(parsed);
   }
 
   final List<ManagedLocation> items;
   final DateTime syncedAt;
   final int locationAccuracyThresholdMeters;
+  final Map<String, int> minimumCheckoutDistanceMetersByProject;
 }

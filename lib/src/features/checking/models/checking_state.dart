@@ -159,6 +159,7 @@ class CheckingState {
     required this.nightModeAfterCheckoutEnabled,
     required this.nightModeAfterCheckoutUntil,
     required this.locationAccuracyThresholdMeters,
+    required this.minimumCheckoutDistanceMetersByProject,
     required this.locationSharingEnabled,
     required this.canEnableLocationSharing,
     required this.autoCheckInEnabled,
@@ -180,6 +181,8 @@ class CheckingState {
     required this.isAutomaticCheckingUpdating,
   });
 
+  static const int defaultMinimumCheckoutDistanceMeters = 2000;
+
   factory CheckingState.initial() {
     return const CheckingState(
       chave: '',
@@ -196,6 +199,7 @@ class CheckingState {
       nightModeAfterCheckoutEnabled: false,
       nightModeAfterCheckoutUntil: null,
       locationAccuracyThresholdMeters: 30,
+      minimumCheckoutDistanceMetersByProject: <String, int>{},
       locationSharingEnabled: false,
       canEnableLocationSharing: false,
       autoCheckInEnabled: false,
@@ -287,6 +291,10 @@ class CheckingState {
       ),
       locationAccuracyThresholdMeters:
           (json['locationAccuracyThresholdMeters'] as num?)?.toInt() ?? 30,
+      minimumCheckoutDistanceMetersByProject:
+          _parseMinimumCheckoutDistanceMetersByProject(
+            json['minimumCheckoutDistanceMetersByProject'],
+          ),
       locationSharingEnabled: locationSharingEnabled,
       canEnableLocationSharing: false,
       autoCheckInEnabled: autoCheckInEnabled,
@@ -334,6 +342,7 @@ class CheckingState {
   final bool nightModeAfterCheckoutEnabled;
   final DateTime? nightModeAfterCheckoutUntil;
   final int locationAccuracyThresholdMeters;
+  final Map<String, int> minimumCheckoutDistanceMetersByProject;
   final bool locationSharingEnabled;
   final bool canEnableLocationSharing;
   final bool autoCheckInEnabled;
@@ -360,6 +369,9 @@ class CheckingState {
   bool get hasValidChave => chave.trim().length == 4;
   bool get hasApiConfig =>
       apiBaseUrl.trim().isNotEmpty && apiSharedKey.trim().isNotEmpty;
+  int get minimumCheckoutDistanceMeters =>
+      minimumCheckoutDistanceMetersByProject[checkInProjeto.apiValue] ??
+      defaultMinimumCheckoutDistanceMeters;
   bool get automaticCheckInOutEnabled =>
       autoCheckInEnabled || autoCheckOutEnabled;
   bool get hasAnyLocationAutomation =>
@@ -435,6 +447,27 @@ class CheckingState {
     return DateTime.tryParse(value)?.toLocal();
   }
 
+  static Map<String, int> _parseMinimumCheckoutDistanceMetersByProject(
+    Object? value,
+  ) {
+    if (value is! Map) {
+      return const <String, int>{};
+    }
+
+    final parsed = <String, int>{};
+    for (final entry in value.entries) {
+      final key = entry.key is String
+          ? entry.key.toString().trim().toUpperCase()
+          : '';
+      final meters = (entry.value as num?)?.toInt();
+      if (key.isEmpty || meters == null || meters < 1) {
+        continue;
+      }
+      parsed[key] = meters;
+    }
+    return Map<String, int>.unmodifiable(parsed);
+  }
+
   static List<LocationFetchEntry> _parseLocationFetchHistory(Object? value) {
     if (value is! List) {
       return const <LocationFetchEntry>[];
@@ -465,6 +498,8 @@ class CheckingState {
           ?.toUtc()
           .toIso8601String(),
       'locationAccuracyThresholdMeters': locationAccuracyThresholdMeters,
+      'minimumCheckoutDistanceMetersByProject':
+          minimumCheckoutDistanceMetersByProject,
       'locationSharingEnabled': locationSharingEnabled,
       'autoCheckInEnabled': autoCheckInEnabled,
       'autoCheckOutEnabled': autoCheckOutEnabled,
@@ -494,6 +529,7 @@ class CheckingState {
     bool? nightModeAfterCheckoutEnabled,
     Object? nightModeAfterCheckoutUntil = _unset,
     int? locationAccuracyThresholdMeters,
+    Map<String, int>? minimumCheckoutDistanceMetersByProject,
     bool? locationSharingEnabled,
     bool? canEnableLocationSharing,
     bool? autoCheckInEnabled,
@@ -538,6 +574,9 @@ class CheckingState {
       locationAccuracyThresholdMeters:
           locationAccuracyThresholdMeters ??
           this.locationAccuracyThresholdMeters,
+      minimumCheckoutDistanceMetersByProject:
+          minimumCheckoutDistanceMetersByProject ??
+          this.minimumCheckoutDistanceMetersByProject,
       locationSharingEnabled:
           locationSharingEnabled ?? this.locationSharingEnabled,
       canEnableLocationSharing:

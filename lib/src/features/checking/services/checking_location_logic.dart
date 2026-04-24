@@ -16,7 +16,6 @@ class CheckingLocationMatchResult {
 }
 
 class CheckingLocationLogic {
-  static const double outOfRangeCheckoutDistanceMeters = 2000;
   static const double defaultLocationAccuracyThresholdMeters = 30;
   static const int maxLocationFetchHistoryEntries =
       LocationFetchEntry.maxStoredEntries;
@@ -436,11 +435,13 @@ class CheckingLocationLogic {
   static RegistroType? resolveAutomaticActionOutOfRange({
     required MobileStateResponse remoteState,
     required double? nearestDistanceMeters,
+    required double minimumCheckoutDistanceMeters,
     required bool autoCheckOutEnabled,
   }) {
     return shouldAttemptAutomaticOutOfRangeCheckout(
           lastRecordedAction: resolveLastRecordedAction(remoteState),
           nearestDistanceMeters: nearestDistanceMeters,
+          minimumCheckoutDistanceMeters: minimumCheckoutDistanceMeters,
           autoCheckOutEnabled: autoCheckOutEnabled,
         )
         ? RegistroType.checkOut
@@ -450,12 +451,14 @@ class CheckingLocationLogic {
   static RegistroType? resolveAutomaticActionWithoutLocationMatch({
     required MobileStateResponse remoteState,
     required double? nearestDistanceMeters,
+    required double minimumCheckoutDistanceMeters,
     required bool autoCheckInEnabled,
     required bool autoCheckOutEnabled,
   }) {
     final outOfRangeAction = resolveAutomaticActionOutOfRange(
       remoteState: remoteState,
       nearestDistanceMeters: nearestDistanceMeters,
+      minimumCheckoutDistanceMeters: minimumCheckoutDistanceMeters,
       autoCheckOutEnabled: autoCheckOutEnabled,
     );
     if (outOfRangeAction != null) {
@@ -465,6 +468,7 @@ class CheckingLocationLogic {
     return shouldAttemptAutomaticNearbyWorkplaceCheckIn(
           lastRecordedAction: resolveLastRecordedAction(remoteState),
           nearestDistanceMeters: nearestDistanceMeters,
+          minimumCheckoutDistanceMeters: minimumCheckoutDistanceMeters,
           autoCheckInEnabled: autoCheckInEnabled,
         )
         ? RegistroType.checkIn
@@ -474,11 +478,12 @@ class CheckingLocationLogic {
   static bool shouldAttemptAutomaticOutOfRangeCheckout({
     required RegistroType? lastRecordedAction,
     required double? nearestDistanceMeters,
+    required double minimumCheckoutDistanceMeters,
     required bool autoCheckOutEnabled,
   }) {
     if (!autoCheckOutEnabled ||
         nearestDistanceMeters == null ||
-        nearestDistanceMeters <= outOfRangeCheckoutDistanceMeters) {
+        nearestDistanceMeters <= minimumCheckoutDistanceMeters) {
       return false;
     }
     return lastRecordedAction == RegistroType.checkIn;
@@ -487,11 +492,12 @@ class CheckingLocationLogic {
   static bool shouldAttemptAutomaticNearbyWorkplaceCheckIn({
     required RegistroType? lastRecordedAction,
     required double? nearestDistanceMeters,
+    required double minimumCheckoutDistanceMeters,
     required bool autoCheckInEnabled,
   }) {
     if (!autoCheckInEnabled ||
         nearestDistanceMeters == null ||
-        nearestDistanceMeters > outOfRangeCheckoutDistanceMeters) {
+        nearestDistanceMeters > minimumCheckoutDistanceMeters) {
       return false;
     }
     return lastRecordedAction != RegistroType.checkIn;
@@ -514,12 +520,13 @@ class CheckingLocationLogic {
   static String? resolveCapturedLocationLabel({
     ManagedLocation? location,
     double? nearestWorkplaceDistanceMeters,
+    required double minimumCheckoutDistanceMeters,
   }) {
     if (location == null) {
       if (nearestWorkplaceDistanceMeters == null) {
         return null;
       }
-      if (nearestWorkplaceDistanceMeters > outOfRangeCheckoutDistanceMeters) {
+      if (nearestWorkplaceDistanceMeters > minimumCheckoutDistanceMeters) {
         return outsideWorkplaceCapturedLocation;
       }
       return uncatalogedCapturedLocation;

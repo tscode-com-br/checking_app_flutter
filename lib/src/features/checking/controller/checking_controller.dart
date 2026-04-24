@@ -51,8 +51,6 @@ class CheckingPermissionSettingsState {
 }
 
 class CheckingController extends ChangeNotifier {
-  static const double outOfRangeCheckoutDistanceMeters =
-      CheckingLocationLogic.outOfRangeCheckoutDistanceMeters;
   static const double defaultLocationAccuracyThresholdMeters =
       CheckingLocationLogic.defaultLocationAccuracyThresholdMeters;
   static const String automaticCheckoutLocation =
@@ -847,6 +845,8 @@ class CheckingController extends ChangeNotifier {
         _state.copyWith(
           locationAccuracyThresholdMeters:
               response.locationAccuracyThresholdMeters,
+          minimumCheckoutDistanceMetersByProject:
+              response.minimumCheckoutDistanceMetersByProject,
         ),
       );
       final isTrackingActive = await _isLocationTrackingActive();
@@ -1013,10 +1013,12 @@ class CheckingController extends ChangeNotifier {
   static String? resolveCapturedLocationLabel({
     ManagedLocation? location,
     double? nearestWorkplaceDistanceMeters,
+    required double minimumCheckoutDistanceMeters,
   }) {
     return CheckingLocationLogic.resolveCapturedLocationLabel(
       location: location,
       nearestWorkplaceDistanceMeters: nearestWorkplaceDistanceMeters,
+      minimumCheckoutDistanceMeters: minimumCheckoutDistanceMeters,
     );
   }
 
@@ -1524,6 +1526,8 @@ class CheckingController extends ChangeNotifier {
         location: matchedLocation,
         nearestWorkplaceDistanceMeters:
             matchResult.nearestWorkplaceDistanceMeters,
+        minimumCheckoutDistanceMeters: _state.minimumCheckoutDistanceMeters
+            .toDouble(),
       );
       final nextState = matchedLocation == null
           ? _state.copyWith(
@@ -1556,12 +1560,18 @@ class CheckingController extends ChangeNotifier {
             shouldAttemptAutomaticOutOfRangeCheckout(
               lastRecordedAction: _state.lastRecordedAction,
               nearestDistanceMeters: matchResult.nearestWorkplaceDistanceMeters,
+              minimumCheckoutDistanceMeters: _state
+                  .minimumCheckoutDistanceMeters
+                  .toDouble(),
               autoCheckOutEnabled: _state.autoCheckOutEnabled,
             );
         final shouldAttemptNearbyWorkplaceCheckIn =
             shouldAttemptAutomaticNearbyWorkplaceCheckIn(
               lastRecordedAction: _state.lastRecordedAction,
               nearestDistanceMeters: matchResult.nearestWorkplaceDistanceMeters,
+              minimumCheckoutDistanceMeters: _state
+                  .minimumCheckoutDistanceMeters
+                  .toDouble(),
               autoCheckInEnabled: _state.autoCheckInEnabled,
             );
         if (!shouldAttemptOutOfRangeCheckout &&
@@ -1742,6 +1752,8 @@ class CheckingController extends ChangeNotifier {
       final nextAction = resolveAutomaticActionWithoutLocationMatch(
         remoteState: remoteState,
         nearestDistanceMeters: nearestDistanceMeters,
+        minimumCheckoutDistanceMeters: _state.minimumCheckoutDistanceMeters
+            .toDouble(),
         autoCheckInEnabled: _state.autoCheckInEnabled,
         autoCheckOutEnabled: _state.autoCheckOutEnabled,
       );
@@ -1807,11 +1819,13 @@ class CheckingController extends ChangeNotifier {
   static RegistroType? resolveAutomaticActionOutOfRange({
     required MobileStateResponse remoteState,
     required double? nearestDistanceMeters,
+    required double minimumCheckoutDistanceMeters,
     required bool autoCheckOutEnabled,
   }) {
     return CheckingLocationLogic.resolveAutomaticActionOutOfRange(
       remoteState: remoteState,
       nearestDistanceMeters: nearestDistanceMeters,
+      minimumCheckoutDistanceMeters: minimumCheckoutDistanceMeters,
       autoCheckOutEnabled: autoCheckOutEnabled,
     );
   }
@@ -1820,12 +1834,14 @@ class CheckingController extends ChangeNotifier {
   static RegistroType? resolveAutomaticActionWithoutLocationMatch({
     required MobileStateResponse remoteState,
     required double? nearestDistanceMeters,
+    required double minimumCheckoutDistanceMeters,
     required bool autoCheckInEnabled,
     required bool autoCheckOutEnabled,
   }) {
     return CheckingLocationLogic.resolveAutomaticActionWithoutLocationMatch(
       remoteState: remoteState,
       nearestDistanceMeters: nearestDistanceMeters,
+      minimumCheckoutDistanceMeters: minimumCheckoutDistanceMeters,
       autoCheckInEnabled: autoCheckInEnabled,
       autoCheckOutEnabled: autoCheckOutEnabled,
     );
@@ -1835,11 +1851,13 @@ class CheckingController extends ChangeNotifier {
   static bool shouldAttemptAutomaticOutOfRangeCheckout({
     required RegistroType? lastRecordedAction,
     required double? nearestDistanceMeters,
+    required double minimumCheckoutDistanceMeters,
     required bool autoCheckOutEnabled,
   }) {
     return CheckingLocationLogic.shouldAttemptAutomaticOutOfRangeCheckout(
       lastRecordedAction: lastRecordedAction,
       nearestDistanceMeters: nearestDistanceMeters,
+      minimumCheckoutDistanceMeters: minimumCheckoutDistanceMeters,
       autoCheckOutEnabled: autoCheckOutEnabled,
     );
   }
@@ -1848,11 +1866,13 @@ class CheckingController extends ChangeNotifier {
   static bool shouldAttemptAutomaticNearbyWorkplaceCheckIn({
     required RegistroType? lastRecordedAction,
     required double? nearestDistanceMeters,
+    required double minimumCheckoutDistanceMeters,
     required bool autoCheckInEnabled,
   }) {
     return CheckingLocationLogic.shouldAttemptAutomaticNearbyWorkplaceCheckIn(
       lastRecordedAction: lastRecordedAction,
       nearestDistanceMeters: nearestDistanceMeters,
+      minimumCheckoutDistanceMeters: minimumCheckoutDistanceMeters,
       autoCheckInEnabled: autoCheckInEnabled,
     );
   }
